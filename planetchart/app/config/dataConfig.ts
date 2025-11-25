@@ -1,4 +1,4 @@
-// Phase 1: Configuration - Data & API Settings
+// Phase 1: Configuration - Data & API Settings  
 // 100% Free-tier friendly with optional paid features
 
 export const dataConfig = {
@@ -13,12 +13,26 @@ export const dataConfig = {
         "Change30d",     // 30-day price change percentage
     ] as const,
 
+    // ===== Chain → CoinGecko Ecosystem Category Mapping =====
+    // Maps internal chain IDs to CoinGecko's ecosystem categories
+    // Used to fetch REAL ecosystem tokens for each chain (moons)
+    chainEcosystemCategory: {
+        ethereum: "ethereum-ecosystem",
+        solana: "solana-ecosystem",
+        bnb: "binance-smart-chain",
+        polygon: "polygon-ecosystem",
+        avalanche: "avalanche-ecosystem",
+        arbitrum: "arbitrum-ecosytem",
+        optimism: "optimism-ecosystem",
+        base: "base-ecosystem",
+    } as Record<string, string>,
+
     // ===== Provider Assignments =====
     // Which API provides what data
     providers: {
         chains: "defillama" as const,      // Chain TVL & rankings (planets)
-        tokens: "dexscreener" as const,    // Token prices & DEX data (moons)
-        btcGlobal: "defillama" as const,   // BTC global stats (or "coingecko" if enabled)
+        tokens: "coingecko" as const,      // Ecosystem tokens via CoinGecko categories
+        btcGlobal: "coingecko" as const,   // BTC global stats
         onChainEth: "etherscan" as const,  // Ethereum-only nerd mode on-chain stats
     },
 
@@ -36,7 +50,7 @@ export const dataConfig = {
         },
     },
 
-    // ===== DexScreener (Primary - 100% Free) =====
+    // ===== DexScreener (Fallback - 100% Free) =====
     dexScreener: {
         baseURL: "https://api.dexscreener.com",
         endpoints: {
@@ -50,20 +64,8 @@ export const dataConfig = {
         },
     },
 
-    // ===== GeckoTerminal (Alternative - 100% Free) =====
-    // Can be used as fallback for DexScreener
-    geckoTerminal: {
-        baseURL: "https://api.geckoterminal.com/api/v2",
-        endpoints: {
-            networks: "/networks",
-            trending: "/networks/trending_pools",
-            tokens: "/networks/{network}/tokens",
-        },
-        enabled: false,                      // Disabled by default, use as fallback
-    },
-
-    // ===== CoinGecko (OPTIONAL - Requires API Key) =====
-    // Only for BTC global stats + historical charts (future feature)
+    // ===== CoinGecko (Primary for Tokens - Requires API Key) =====
+    // Used for ecosystem tokens (moons) + BTC global stats
     coinGecko: {
         baseURL: "https://api.coingecko.com/api/v3",
         apiKeyEnvVar: "COINGECKO_API_KEY",   // Optional: read from .env
@@ -71,10 +73,11 @@ export const dataConfig = {
             bitcoin: "/coins/bitcoin",
             globalData: "/global",
             markets: "/coins/markets",
+            ecosystemTokens: "/coins/markets", // Fetch ecosystem tokens by category
         },
-        enabledByDefault: false,             // App MUST work without CoinGecko
+        enabledByDefault: true,              // Enable for ecosystem token fetching
         rateLimit: {
-            requestsPerMinute: 30,             // Demo API free tier
+            requestsPerMinute: 30,           // Demo API free tier
             requestsPerMonth: 10000,
         },
     },
@@ -96,21 +99,13 @@ export const dataConfig = {
         onlyForEthereum: true,               // CRITICAL: Only use for Ethereum tokens
     },
 
-    // ===== Refresh Intervals (Respect Rate Limits) =====
-    // These prevent excessive API calls
-    refreshIntervals: {
-        btc: 30000,          // 30s - BTC stats refresh
-        chains: 60000,       // 1min - Chain TVL refresh
-        tokens: 120000,      // 2min - Token prices refresh
-        globalStats: 300000, // 5min - Global market stats
-    },
-
     // ===== Chain ID Mapping =====
-    // Maps DefiLlama chain names → DexScreener/Etherscan chain IDs
+    // Maps DefiLlama chain names → internal/DexScreener chain IDs
     chainIdMap: {
         "Ethereum": "ethereum",
         "Solana": "solana",
-        "BSC": "bsc",
+        "BSC": "bnb",
+        "BNB Chain": "bnb",
         "Polygon": "polygon",
         "Arbitrum": "arbitrum",
         "Avalanche": "avalanche",
@@ -118,12 +113,12 @@ export const dataConfig = {
         "Base": "base",
         "Fantom": "fantom",
         "Cronos": "cronos",
-        "Pulsechain": "pulsechain",
+        "Pulsechain": "pulse chain",
     } as const,
 
     // ===== Data Limits =====
-    maxChains: 10,                   // Max chains to fetch/display
-    tokensPerChain: 20,              // Max tokens per chain
+    maxChains: 12,                           // Display up to 12 chains (planets)
+    tokensPerChain: 24,                     // Tokens (moons) per chain - matches ring system
     minTVLThreshold: 1000000,        // Min TVL to include chain ($1M)
     minTokenLiquidity: 50000,        // Min liquidity to include token ($50k)
 
@@ -131,9 +126,9 @@ export const dataConfig = {
     cache: {
         enabled: true,                 // Enable in-memory caching
         ttl: {
-            btc: 30000,                  // 30s cache for BTC
-            chains: 60000,               // 1min cache for chains
-            tokens: 120000,              // 2min cache for tokens
+            btc: 60000,                  // 60s cache for BTC
+            chains: 120000,               // 2min cache for chains
+            tokens: 180000,              // 3min cache for tokens (CoinGecko rate limit)
             onChainStats: 600000,        // 10min cache for Etherscan data
         },
     },
@@ -152,5 +147,5 @@ export const dataConfig = {
 // Export types
 export type WeightMode = typeof dataConfig.supportedWeightModes[number];
 export type ChainId = keyof typeof dataConfig.chainIdMap;
-export type DataProvider = "defillama" | "dexscreener" | "geckoterminal" | "coingecko" | "etherscan";
+export type DataProvider = "defillama" | "dexscreener" | "coingecko" | "etherscan";
 export type DataConfig = typeof dataConfig;

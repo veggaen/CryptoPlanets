@@ -25,10 +25,25 @@ export async function loadGalaxyData(weightMode: WeightMode): Promise<GalaxyData
             .sort((a, b) => b.weight - a.weight)
             .slice(0, dataConfig.maxChains);
 
-        // Fetch tokens for each chain
+        // Fetch tokens for each chain using ecosystem-specific APIs
         const chainsWithTokens = await Promise.all(
             weightedChains.map(async (chain) => {
-                const tokens = await fetchTokensForChain(chain.id, dataConfig.tokensPerChain);
+                let tokens: any[] = [];
+
+                // Check if this chain has a CoinGecko ecosystem category mapping
+                const ecosystemCategory = dataConfig.chainEcosystemCategory[chain.id];
+
+                if (ecosystemCategory) {
+                    // Use CoinGecko for ecosystem tokens (REAL chain-specific tokens)
+                    debugLog('data', `Fetching ecosystem tokens for ${chain.id} from category: ${ecosystemCategory}`);
+                    const { fetchEcosystemTokensFromCoinGecko } = await import("./coinGecko");
+                    tokens = await fetchEcosystemTokensFromCoinGecko(ecosystemCategory, dataConfig.tokensPerChain);
+                } else {
+                    // Fallback to DexScreener for chains without ecosystem mapping
+                    debugLog('data', `Fetching tokens for ${chain.id} from DexScreener (no ecosystem category)`);
+                    tokens = await fetchTokensForChain(chain.id, dataConfig.tokensPerChain);
+                }
+
                 return { ...chain, tokens };
             })
         );

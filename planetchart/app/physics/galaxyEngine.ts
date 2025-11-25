@@ -94,9 +94,17 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
         // --- Create MOON Nodes (if chain) ---
         if (body.type === 'chain') {
             const chain = body.data as ChainData;
+            const planetRadius = node.radius; // Get the planet's visual radius
+
             chain.tokens.forEach((token, tIndex) => {
+                // Distribute moons in a ring around planet
+                // CRITICAL: Moons must orbit OUTSIDE the planet, not overlap it
                 const moonAngle = (tIndex / chain.tokens.length) * Math.PI * 2 + Math.random();
-                const moonOrbitRadius = physicsConfig.tokenOrbitMinRadius + (Math.random() * (physicsConfig.tokenOrbitMaxRadius - physicsConfig.tokenOrbitMinRadius));
+
+                // Start moon orbits outside the planet radius + padding
+                const minMoonOrbit = planetRadius + physicsConfig.tokenOrbitMinRadius;
+                const maxMoonOrbit = planetRadius + physicsConfig.tokenOrbitMaxRadius;
+                const moonOrbitRadius = minMoonOrbit + (Math.random() * (maxMoonOrbit - minMoonOrbit));
 
                 const moonX = x + Math.cos(moonAngle) * moonOrbitRadius;
                 const moonY = y + Math.sin(moonAngle) * moonOrbitRadius;

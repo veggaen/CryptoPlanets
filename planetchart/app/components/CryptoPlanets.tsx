@@ -12,6 +12,7 @@ import { initGalaxyState, tickGalaxy } from "@/physics/galaxyEngine";
 import { physicsConfig } from "@/config/physicsConfig";
 import { uiConfig } from "@/config/uiConfig";
 import Starfield from "./Starfield";
+import Footer from "./Footer";
 
 // --- Components ---
 
@@ -48,14 +49,18 @@ const PlanetNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
         zIndex: node.type === 'sun' ? 10 : 20,
       }}
     >
-      {(zoom > 0.5 || node.type === 'sun') && (
+      {(zoom > 0.3 || node.type === 'sun') && (
         <div className="text-center pointer-events-none" style={{ transform: `scale(${1 / zoom})` }}>
-          <div className="font-bold text-white whitespace-nowrap" style={{ fontSize: node.type === 'sun' ? 24 : 14 }}>
-            {('symbol' in node.data ? node.data.symbol : null) || "BTC"}
+          <div className="font-bold text-white whitespace-nowrap drop-shadow-lg" style={{ fontSize: node.type === 'sun' ? 24 : 16 }}>
+            {('name' in node.data ? node.data.name : null) || ('symbol' in node.data ? node.data.symbol : null) || "BTC"}
           </div>
-          {zoom > 0.8 && (
-            <div className="text-xs text-white/80">
-              {node.type === 'sun' ? 'Sun' : `$${('price' in node.data ? node.data.price : 0)?.toLocaleString()}`}
+          {zoom > 0.6 && (
+            <div className="text-xs text-white/90 drop-shadow">
+              {node.type === 'sun' ? 'Sun' : (
+                'tvl' in node.data && node.data.tvl
+                  ? `TVL: $${(node.data.tvl / 1e9).toFixed(1)}B`
+                  : ('price' in node.data ? `$${node.data.price?.toLocaleString()}` : '')
+              )}
             </div>
           )}
         </div>
@@ -65,11 +70,12 @@ const PlanetNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
 };
 
 const MoonNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
-  if (zoom < 0.6) return null;
+  // Always show moons as dots, just hide labels when zoomed out
+  const showLabel = zoom > 1.2; // Only show labels when significantly zoomed in
 
   return (
     <motion.div
-      className="absolute rounded-full bg-slate-300"
+      className="absolute rounded-full"
       style={{
         left: node.x,
         top: node.y,
@@ -80,7 +86,18 @@ const MoonNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
         backgroundColor: node.color,
         zIndex: 30,
       }}
-    />
+    >
+      {showLabel && 'symbol' in node.data && (
+        <div
+          className="text-center pointer-events-none absolute inset-0 flex items-center justify-center"
+          style={{ transform: `scale(${1 / zoom})` }}
+        >
+          <div className="text-[8px] text-white font-bold whitespace-nowrap bg-black/50 px-1 rounded">
+            {node.data.symbol}
+          </div>
+        </div>
+      )}
+    </motion.div>
   );
 };
 
@@ -253,6 +270,9 @@ export default function CryptoPlanets() {
           </div>
         </div>
       </div>
+
+      {/* Footer with API attribution and donation */}
+      <Footer />
     </div>
   );
 }
