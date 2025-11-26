@@ -73,7 +73,7 @@ export default function OrbitalTrails({
                         strokeWidth="1.5"
                         strokeDasharray="8 12"
                         opacity={orbit.opacity}
-                        filter="url(#orbit-glow)"
+                        filter="url(#orbit-glow) drop-shadow(0 0 2px rgba(6,182,212,0.3))"
                         initial={{ pathLength: 0, opacity: 0 }}
                         animate={{ pathLength: 1, opacity: orbit.opacity }}
                         transition={{

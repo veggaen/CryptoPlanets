@@ -10,7 +10,7 @@ export const DEBUG_FLAGS = {
     render: false,         // React rendering cycles
     collisions: false,     // Collision detection details
     performance: false,    // Performance metrics
-} as const;
+};
 
 type DebugArea = keyof typeof DEBUG_FLAGS;
 

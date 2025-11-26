@@ -11,6 +11,7 @@ import { loadGalaxyData } from "@/services/dataLoader";
 import { initGalaxyState, tickGalaxy } from "@/physics/galaxyEngine";
 import { physicsConfig } from "@/config/physicsConfig";
 import { uiConfig } from "@/config/uiConfig";
+import { visualConfig } from "@/config/visualConfig";
 import Starfield from "./Starfield";
 import Footer from "./Footer";
 
@@ -31,51 +32,79 @@ const PlanetNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
   const { from, to } = node.type === 'sun' ? { from: '#fbbf24', to: '#d97706' } : getGradientColors(node.color);
 
   return (
-    <motion.div
-      className="absolute rounded-full flex items-center justify-center shadow-lg backdrop-blur-sm"
+    <div
+      className="absolute"
       style={{
         left: node.x,
         top: node.y,
-        width: node.radius * 2,
-        height: node.radius * 2,
-        x: -node.radius,
-        y: -node.radius,
-        background: node.type === 'sun'
-          ? `radial-gradient(circle at 30% 30%, ${from}, ${to})`
-          : `linear-gradient(135deg, ${from}, ${to})`,
-        boxShadow: node.type === 'sun'
-          ? `0 0 ${60 * zoom}px ${20 * zoom}px rgba(251, 191, 36, 0.4)`
-          : `0 0 ${20 * zoom}px rgba(255,255,255,0.1)`,
+        transform: 'translate(-50%, -50%)',
         zIndex: node.type === 'sun' ? 10 : 20,
       }}
     >
-      {(zoom > 0.3 || node.type === 'sun') && (
-        <div className="text-center pointer-events-none" style={{ transform: `scale(${1 / zoom})` }}>
-          <div className="font-bold text-white whitespace-nowrap drop-shadow-lg" style={{ fontSize: node.type === 'sun' ? 24 : 16 }}>
-            {('name' in node.data ? node.data.name : null) || ('symbol' in node.data ? node.data.symbol : null) || "BTC"}
-          </div>
-          {zoom > 0.6 && (
-            <div className="text-xs text-white/90 drop-shadow">
-              {node.type === 'sun' ? 'Sun' : (
-                'tvl' in node.data && node.data.tvl
-                  ? `TVL: $${(node.data.tvl / 1e9).toFixed(1)}B`
-                  : ('price' in node.data ? `$${node.data.price?.toLocaleString()}` : '')
-              )}
-            </div>
-          )}
-        </div>
+      {/* Planet Halo - more visible, especially when zoomed out */}
+      {node.type !== 'sun' && (
+        <div
+          className="absolute rounded-full pointer-events-none"
+          style={{
+            width: node.radius * 3.2,
+            height: node.radius * 3.2,
+            background: `radial-gradient(circle, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.3) 50%, rgba(0,0,0,0) 80%)`,
+            left: '50%',
+            top: '50%',
+            transform: 'translate(-50%, -50%)',
+          }}
+        />
       )}
-    </motion.div>
+
+      {/* Planet/Sun Body - always visible */}
+      <motion.div
+        className="absolute rounded-full flex items-center justify-center shadow-xl shadow-yellow-500/50 opacity-90 border border-yellow-300/50"
+        style={{
+          left: '50%',
+          top: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: node.radius * 2,
+          height: node.radius * 2,
+          background: node.type === 'sun'
+            ? `radial-gradient(circle at 30% 30%, ${from}, ${to})`
+            : `linear-gradient(135deg, ${from}, ${to})`,
+          boxShadow: node.type === 'sun'
+            ? `0 0 ${60 * zoom}px ${20 * zoom}px rgba(251, 191, 36, 0.4)`
+            : `0 0 ${20 * zoom}px rgba(255,255,255,0.1)`,
+        }}
+      />
+
+      {/* Planet/Sun Labels - ALWAYS show for planets and sun */}
+      <div
+        className="absolute pointer-events-none flex flex-col items-center justify-center"
+        style={{
+          left: '50%',
+          top: '50%',
+          transform: `translate(-50%, -50%) scale(${1 / Math.max(0.5, zoom)})`,
+        }}
+      >
+        <div className="font-bold text-white whitespace-nowrap drop-shadow-lg" style={{ fontSize: node.type === 'sun' ? 24 : 16 }}>
+          {('symbol' in node.data ? node.data.symbol : null) || ('name' in node.data ? node.data.name : null) || "BTC"}
+        </div>
+        {zoom > 0.6 && (
+          <div className="text-xs text-white/90 drop-shadow mt-1">
+            {'currentPrice' in node.data && node.data.currentPrice
+              ? `$${node.data.currentPrice.toFixed(2)}`
+              : ''}
+          </div>
+        )}
+      </div>
+    </div>
   );
 };
 
 const MoonNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
-  // Always show moons as dots, just hide labels when zoomed out
+  // Moons: always render body, show labels when zoomed in
   const showLabel = zoom > 1.2; // Only show labels when significantly zoomed in
 
   return (
     <motion.div
-      className="absolute rounded-full"
+      className={`absolute rounded-full ${visualConfig.holoStyle.shadow} ${visualConfig.holoStyle.opacity} ${visualConfig.holoStyle.border}`}
       style={{
         left: node.x,
         top: node.y,
@@ -89,11 +118,18 @@ const MoonNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
     >
       {showLabel && 'symbol' in node.data && (
         <div
-          className="text-center pointer-events-none absolute inset-0 flex items-center justify-center"
-          style={{ transform: `scale(${1 / zoom})` }}
+          className="text-center pointer-events-none absolute"
+          style={{
+            left: '50%',
+            top: '120%', // Position below moon
+            transform: `translate(-50%, 0) scale(${1 / zoom})`,
+          }}
         >
-          <div className="text-[8px] text-white font-bold whitespace-nowrap bg-black/50 px-1 rounded">
+          <div className="text-[10px] text-white font-bold whitespace-nowrap bg-black/70 px-1.5 py-0.5 rounded">
             {node.data.symbol}
+            {'currentPrice' in node.data && node.data.currentPrice && (
+              <div className="text-[8px] text-white/80">${node.data.currentPrice.toFixed(2)}</div>
+            )}
           </div>
         </div>
       )}

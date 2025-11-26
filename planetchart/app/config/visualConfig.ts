@@ -162,6 +162,13 @@ export const visualConfig = {
         nebulaeCount: 3,              // Number of nebula effects
         gridEnabled: false,           // Show coordinate grid
     },
+
+    // ===== Holo Style Constants =====
+    holoStyle: {
+        shadow: 'shadow-lg shadow-cyan-500/50',
+        opacity: 'opacity-80',
+        border: 'border border-cyan-300/50',
+    },
 } as const;
 
 // Export types

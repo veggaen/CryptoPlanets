@@ -25,6 +25,23 @@ export async function loadGalaxyData(weightMode: WeightMode): Promise<GalaxyData
             .sort((a, b) => b.weight - a.weight)
             .slice(0, dataConfig.maxChains);
 
+        // Fetch native token prices for all chains
+        const geckoIds = weightedChains
+            .map(c => c.geckoId)
+            .filter((id): id is string => id !== undefined && id !== null);
+
+        debugLog('data', `Fetching prices for ${geckoIds.length} chain native tokens: ${geckoIds.join(', ')}`);
+        const { fetchCoinsPrices } = await import('./coinGecko');
+        const chainPrices = await fetchCoinsPrices(geckoIds);
+
+        // Populate prices in chains
+        weightedChains.forEach(chain => {
+            if (chain.geckoId && chainPrices[chain.geckoId]) {
+                chain.price = chainPrices[chain.geckoId];
+                debugLog('data', `Set price for ${chain.name}: $${chain.price}`);
+            }
+        });
+
         // Fetch tokens for each chain using ecosystem-specific APIs
         const chainsWithTokens = await Promise.all(
             weightedChains.map(async (chain) => {

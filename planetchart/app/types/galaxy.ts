@@ -31,6 +31,7 @@ export type ChainData = {
     dominance: number;        // % of total crypto market
     color: string;            // Visual theme color
     tokens: TokenData[];      // Top tokens on this chain
+    geckoId?: string;         // CoinGecko ID for fetching native token price
 };
 
 // ===== Bitcoin (Sun) Data =====
@@ -55,8 +56,8 @@ export type GalaxyData = {
 export type GalaxyNode = {
     // Identification
     id: string;                    // Unique identifier
-    type: "sun" | "planet" | "moon"; // Node type
-    parentId: string | null;       // null for sun, chainId for moons
+    type: "sun" | "planet" | "moon" | "meteorite"; // Node type: sun (BTC/largest), planet (chain), moon (liquid token), meteorite (illiquid token)
+    parentId: string | null;       // null for sun, chainId for moons, moonId for meteorites
 
     // Position & Velocity
     x: number;                     // World X coordinate
@@ -80,10 +81,14 @@ export type GalaxyNode = {
     // Data Reference
     data: BTCData | ChainData | TokenData; // Original data
 
-    // State Flags
-    isDragging: boolean;           // Currently being dragged
-    isSelected: boolean;           // Currently selected
-    isHovered: boolean;            // Mouse hovering over
+    // Interaction State
+    isDragging: boolean;
+    isSelected: boolean;
+    isHovered: boolean;
+
+    // Collision Visual Effects (soft, decaying)
+    collisionGlow?: number;        // 0-1, brightness of collision glow effect
+    radiusOffset?: number;         // Small radial wobble from collisions (px)
 };
 
 // ===== Galaxy Physics State =====
@@ -92,7 +97,8 @@ export type GalaxyState = {
     sunNode: GalaxyNode;           // Reference to BTC sun
     planetNodes: GalaxyNode[];     // All chain planets
     moonNodes: GalaxyNode[];       // All token moons
-    timestamp: number;            // Last update timestamp
+    meteoriteNodes: GalaxyNode[];  // All illiquid token meteorites
+    timestamp: number;             // Last update timestamp
 };
 
 // ===== Camera State =====

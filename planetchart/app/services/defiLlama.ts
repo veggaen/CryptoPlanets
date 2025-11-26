@@ -67,6 +67,8 @@ function transformChains(chains: DefiLlamaChain[]): ChainData[] {
                 dominance: 0, // Calculated later
                 color: "from-gray-500 to-gray-700", // Default color, overridden by visualConfig
                 tokens: [],
+                // Store gecko_id temporarily for price fetching
+                geckoId: c.gecko_id,
             };
             return chainData;
         })

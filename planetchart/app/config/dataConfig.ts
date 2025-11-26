@@ -22,7 +22,7 @@ export const dataConfig = {
         bnb: "binance-smart-chain",
         polygon: "polygon-ecosystem",
         avalanche: "avalanche-ecosystem",
-        arbitrum: "arbitrum-ecosytem",
+        arbitrum: "arbitrum-ecosystem",
         optimism: "optimism-ecosystem",
         base: "base-ecosystem",
     } as Record<string, string>,
@@ -126,11 +126,12 @@ export const dataConfig = {
     cache: {
         enabled: true,                 // Enable in-memory caching
         ttl: {
-            btc: 60000,                  // 60s cache for BTC
-            chains: 120000,               // 2min cache for chains
-            tokens: 180000,              // 3min cache for tokens (CoinGecko rate limit)
+            btc: 300000,                 // 5 minutes for BTC
+            chains: 600000,              // 10 minutes for chains
+            tokens: 600000,              // 10 minutes for tokens (CoinGecko rate limit)
             onChainStats: 600000,        // 10min cache for Etherscan data
         },
+        rateLimitCooldown: 60000,      // 1 minute cooldown after 429 rate limit
     },
 
     // ===== Fallback & Mock Data =====

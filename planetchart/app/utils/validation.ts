@@ -120,8 +120,9 @@ export function validateGalaxyData(data: unknown): asserts data is GalaxyData {
         debugLog('data', '✅ GalaxyData validation passed');
     } catch (error) {
         if (error instanceof ZodError) {
-            console.error('[VALIDATION ERROR] GalaxyData failed validation:', error.errors);
-            throw new Error(`GalaxyData validation failed: ${error.errors.map(e => e.message).join(', ')}`);
+            const zError = error as any;
+            console.error('[VALIDATION ERROR] GalaxyData failed validation:', zError.errors);
+            throw new Error(`GalaxyData validation failed: ${zError.errors.map((e: any) => e.message).join(', ')}`);
         }
         throw error;
     }
@@ -136,8 +137,9 @@ export function validateBTCData(data: unknown): asserts data is BTCData {
         debugLog('data', '✅ BTCData validation passed');
     } catch (error) {
         if (error instanceof ZodError) {
-            console.error('[VALIDATION ERROR] BTCData failed:', error.errors);
-            throw new Error(`BTCData validation failed: ${error.errors[0].message}`);
+            const zError = error as any;
+            console.error('[VALIDATION ERROR] BTCData failed:', zError.errors);
+            throw new Error(`BTCData validation failed: ${zError.errors[0].message}`);
         }
         throw error;
     }
@@ -152,8 +154,9 @@ export function validateChainData(data: unknown): asserts data is ChainData {
         debugLog('data', '✅ ChainData validation passed');
     } catch (error) {
         if (error instanceof ZodError) {
-            console.error('[VALIDATION ERROR] ChainData failed:', error.errors);
-            throw new Error(`ChainData validation failed: ${error.errors[0].message}`);
+            const zError = error as any;
+            console.error('[VALIDATION ERROR] ChainData failed:', zError.errors);
+            throw new Error(`ChainData validation failed: ${zError.errors[0].message}`);
         }
         throw error;
     }
@@ -168,8 +171,9 @@ export function validateTokens(data: unknown): asserts data is TokenData[] {
         debugLog('data', `✅ Validated ${(data as any[]).length} tokens`);
     } catch (error) {
         if (error instanceof ZodError) {
-            console.error('[VALIDATION ERROR] TokenData[] failed:', error.errors);
-            throw new Error(`TokenData validation failed: ${error.errors[0].message}`);
+            const zError = error as any;
+            console.error('[VALIDATION ERROR] TokenData[] failed:', zError.errors);
+            throw new Error(`TokenData validation failed: ${zError.errors[0].message}`);
         }
         throw error;
     }
@@ -181,8 +185,9 @@ export function validateTokens(data: unknown): asserts data is TokenData[] {
 export function validateDefiLlamaChains(data: unknown): asserts data is DefiLlamaChain[] {
     const result = z.array(defiLlamaChainSchema).safeParse(data);
     if (!result.success) {
-        console.error('[VALIDATION ERROR] DefiLlama response failed:', JSON.stringify(result.error.format(), null, 2));
-        throw new Error(`DefiLlama validation failed: ${result.error.errors[0]?.message || 'Unknown error'}`);
+        const zError = result.error as any;
+        console.error('[VALIDATION ERROR] DefiLlama response failed:', JSON.stringify(zError.format(), null, 2));
+        throw new Error(`DefiLlama validation failed: ${zError.errors[0]?.message || 'Unknown error'}`);
     }
     debugLog('data', `✅ Validated ${(data as any[]).length} DefiLlama chains`);
 }
@@ -196,8 +201,9 @@ export function validateDexScreenerTokens(data: unknown): asserts data is DexScr
         debugLog('data', `✅ Validated ${(data as any[]).length} DexScreener tokens`);
     } catch (error) {
         if (error instanceof ZodError) {
-            console.error('[VALIDATION ERROR] DexScreener response failed:', error.errors);
-            throw new Error(`DexScreener validation failed: ${error.errors[0].message}`);
+            const zError = error as any;
+            console.error('[VALIDATION ERROR] DexScreener response failed:', zError.errors);
+            throw new Error(`DexScreener validation failed: ${zError.errors[0].message}`);
         }
         throw error;
     }
@@ -212,8 +218,9 @@ export function validateCoinGeckoMarkets(data: unknown): asserts data is CoinGec
         debugLog('data', `✅ Validated ${(data as any[]).length} CoinGecko markets`);
     } catch (error) {
         if (error instanceof ZodError) {
-            console.error('[VALIDATION ERROR] CoinGecko response failed:', error.errors);
-            throw new Error(`CoinGecko validation failed: ${error.errors[0].message}`);
+            const zError = error as any;
+            console.error('[VALIDATION ERROR] CoinGecko response failed:', zError.errors);
+            throw new Error(`CoinGecko validation failed: ${zError.errors[0].message}`);
         }
         throw error;
     }
