@@ -13,12 +13,12 @@ export const physicsConfig = {
     planetGravity: 0.02,            // Gravity constant for Planets pulling Moons
     moonGravity: 0.005,             // Gravity constant for Moons pulling Asteroids
     friction: 0.99,                 // Velocity damping per tick (0.99 = 1% loss)
-    moonFriction: 0.95,             // ADDED: Extra friction for fast-orbiting moons
+    moonFriction: 0.92,             // HEAVY friction for moons to dampen bounce (was 0.95)
     repulsion: 4,                   // Soft repulsion force strength (reduced for gentleness)
     damper: 0.5,                    // Collision velocity damping (0-1, for inelastic collisions)
 
     // ===== Stability & Limits =====
-    orbitCorrectionStrength: 0.05,  // Strength of "tether" to ideal orbit (restored from 0.01)
+    orbitCorrectionStrength: 0.001,  // VERY LOW - let physics dominate to avoid sync bounce
     maxVelocity: 15,                // Cap on maximum velocity to prevent explosions
 
     // ===== Collision & Visuals =====

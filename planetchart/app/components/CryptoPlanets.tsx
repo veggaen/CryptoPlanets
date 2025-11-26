@@ -86,11 +86,10 @@ const PlanetNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
         <div className="font-bold text-white whitespace-nowrap drop-shadow-lg" style={{ fontSize: node.type === 'sun' ? 24 : 16 }}>
           {('symbol' in node.data ? node.data.symbol : null) || ('name' in node.data ? node.data.name : null) || "BTC"}
         </div>
-        {zoom > 0.6 && (
+        {/* ALWAYS show price for planets/sun */}
+        {'price' in node.data && typeof node.data.price === 'number' && (
           <div className="text-xs text-white/90 drop-shadow mt-1">
-            {'currentPrice' in node.data && node.data.currentPrice
-              ? `$${node.data.currentPrice.toFixed(2)}`
-              : ''}
+            ${node.data.price.toFixed(2)}
           </div>
         )}
       </div>
@@ -99,8 +98,12 @@ const PlanetNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
 };
 
 const MoonNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
-  // Moons: always render body, show labels when zoomed in
-  const showLabel = zoom > 1.2; // Only show labels when significantly zoomed in
+  // Show labels when zoomed in just a bit
+  const showLabel = zoom > 0.7;
+
+  // Extract ticker and price
+  const ticker = 'symbol' in node.data ? node.data.symbol : '';
+  const price = 'price' in node.data && typeof node.data.price === 'number' ? node.data.price : null;
 
   return (
     <motion.div
@@ -116,21 +119,26 @@ const MoonNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
         zIndex: 30,
       }}
     >
-      {showLabel && 'symbol' in node.data && (
+      {/* Centered Text Labels - INSIDE the moon like planets */}
+      {showLabel && ticker && (
         <div
-          className="text-center pointer-events-none absolute"
+          className="absolute pointer-events-none flex flex-col items-center justify-center overflow-hidden"
           style={{
             left: '50%',
-            top: '120%', // Position below moon
-            transform: `translate(-50%, 0) scale(${1 / zoom})`,
+            top: '50%',
+            transform: 'translate(-50%, -50%)',
+            width: '90%',
+            height: '90%',
           }}
         >
-          <div className="text-[10px] text-white font-bold whitespace-nowrap bg-black/70 px-1.5 py-0.5 rounded">
-            {node.data.symbol}
-            {'currentPrice' in node.data && node.data.currentPrice && (
-              <div className="text-[8px] text-white/80">${node.data.currentPrice.toFixed(2)}</div>
-            )}
+          <div className="text-white font-bold drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] antialiased text-center" style={{ fontSize: '7px' }}>
+            {ticker}
           </div>
+          {price && (
+            <div className="text-white/90 drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] antialiased text-center" style={{ fontSize: '5px' }}>
+              ${price.toFixed(2)}
+            </div>
+          )}
         </div>
       )}
     </motion.div>

@@ -142,8 +142,8 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
                     parentId: chain.id,
                     x: moonX,
                     y: moonY,
-                    vx: 0,
-                    vy: 0,
+                    vx: (Math.random() - 0.5) * 0.5 + (index * 0.01), // Better randomization per planet
+                    vy: (Math.random() - 0.5) * 0.5 + (tIndex * 0.01),
                     radius,
                     color: token.color || '#cbd5e1',
                     orbitRadius: moonOrbitRadius,
@@ -303,7 +303,7 @@ export function tickGalaxy(state: GalaxyState, dt: number): void {
             // This prevents expensive cross-system checks and reduces oscillation
             moons.forEach(other => {
                 if (node.id !== other.id && node.parentId === other.parentId) {
-                    applyRepulsion(node, other, dt, 1.0); // INCREASED from 0.5 to prevent overlaps
+                    applyRepulsion(node, other, dt, 2.0); // STRONG repulsion to prevent overlaps
                 }
             });
             // REDUCED repulsion from parent planet (was 2.0, now 0.5)
