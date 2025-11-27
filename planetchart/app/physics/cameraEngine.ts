@@ -7,17 +7,17 @@ import { uiConfig } from "@/config/uiConfig";
 // ===== CAMERA CONFIGURATION =====
 const CAMERA_CONFIG = {
     // Follow mode settings
-    followLerpSpeed: 0.08,        // How fast camera catches up to target (0-1, higher = faster)
+    followLerpSpeed: 0.12,        // How fast camera catches up to target (0-1, higher = faster)
     followZoomDistance: 0.15,     // Zoom level when following a planet
     followSunZoomDistance: 0.08,  // Zoom level when following the sun
     
     // Transition smoothing
     transitionDuration: 1000,     // ms for smooth zoom transitions
-    zoomLerpSpeed: 0.05,          // Zoom interpolation speed
+    zoomLerpSpeed: 0.08,          // Zoom interpolation speed (slightly faster for responsiveness)
     
     // Zoom limits - EXPANDED for full galaxy view
-    minZoom: 0.005,               // Allow extreme zoom out to see entire galaxy
-    maxZoom: 2.0,                 // Allow close-up viewing
+    minZoom: 0.003,               // Allow extreme zoom out to see entire galaxy
+    maxZoom: 3.0,                 // Allow close-up viewing of small moons
     
     // Orbit offset - adds slight offset to following position
     orbitViewOffset: 0,           // No offset = planet centered perfectly

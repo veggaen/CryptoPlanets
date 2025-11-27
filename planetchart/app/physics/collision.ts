@@ -9,14 +9,19 @@ import type { GalaxyNode } from "@/types/galaxy";
 // ============================================================================
 
 export const collisionConfig = {
-    // Physics - BOUNCY like marbles!
-    restitution: 1.2,            // >1.0 = super bouncy marbles that ping off each other
-    damping: 0.98,               // Very little damping - keep the bounce energy
-    minSeparation: 5,            // Bit more gap to prevent sticky collisions
+    // Physics - TRUE BOWLING BALL MOMENTUM TRANSFER!
+    // When balls collide, momentum is conserved: m1*v1 + m2*v2 = m1*v1' + m2*v2'
+    restitution: 0.95,           // Slight energy loss (0.95 = 95% energy retained)
+    damping: 0.995,              // Very minimal damping - balls keep rolling
+    minSeparation: 8,            // Bit more gap to prevent sticky collisions
+    
+    // Momentum transfer settings
+    momentumTransferRatio: 1.0,  // 1.0 = perfect momentum transfer (bowling ball)
+    massExponent: 0.8,           // How much mass affects collision (lower = more equal)
     
     // Thresholds
-    grazingSpeedThreshold: 80,   // Below this = gentle touch, above = impact
-    supernovaSpeedThreshold: 200, // Above this = full supernova effect
+    grazingSpeedThreshold: 40,   // Below this = gentle touch, above = impact
+    supernovaSpeedThreshold: 180, // Above this = full supernova effect
     
     // Supernova Event - sends moons on 1-3 orbits around the sun!
     supernovaCooldownMs: 60000,  // 1 minute between supernovas
@@ -707,7 +712,8 @@ export function areNodesColliding(n1: GalaxyNode, n2: GalaxyNode): boolean {
 }
 
 /**
- * Resolve collision between two nodes with proper physics
+ * Resolve collision between two nodes with TRUE BOWLING BALL PHYSICS
+ * Uses proper momentum conservation: m1*v1 + m2*v2 = m1*v1' + m2*v2'
  * Returns true if collision occurred
  */
 export function resolveCollision(a: GalaxyNode, b: GalaxyNode): CollisionResult {
@@ -729,10 +735,16 @@ export function resolveCollision(a: GalaxyNode, b: GalaxyNode): CollisionResult 
     // Calculate overlap amount
     const overlap = sumRadii + collisionConfig.minSeparation - dist;
     
+    // === BOWLING BALL PHYSICS: Proper mass-based momentum transfer ===
+    // Use mass with exponent to allow smaller moons to still transfer momentum
+    const massExponent = collisionConfig.massExponent;
+    const aMass = Math.pow(a.mass, massExponent);
+    const bMass = Math.pow(b.mass, massExponent);
+    const totalMass = aMass + bMass;
+    
     // Mass-based separation (heavier objects move less)
-    const totalMass = a.mass + b.mass;
-    const aRatio = b.mass / totalMass;
-    const bRatio = a.mass / totalMass;
+    const aRatio = bMass / totalMass;
+    const bRatio = aMass / totalMass;
     
     // Separate them so they just touch (no overlap ever!)
     a.x -= nx * overlap * aRatio;
@@ -756,26 +768,52 @@ export function resolveCollision(a: GalaxyNode, b: GalaxyNode): CollisionResult 
     
     // Only apply velocity change if objects are approaching
     if (relVelAlongNormal < 0) {
-        // Calculate impulse for marble-like bouncing
-        const { restitution } = collisionConfig;
-        const impulse = (1 + restitution) * relVelAlongNormal / (1/a.mass + 1/b.mass);
+        // === TRUE MOMENTUM CONSERVATION ===
+        // For elastic collision: v1' = ((m1-m2)*v1 + 2*m2*v2) / (m1+m2)
+        // For 1D along normal: 
+        // v1n' = ((m1-m2)*v1n + 2*m2*v2n) / (m1+m2)
+        // v2n' = ((m2-m1)*v2n + 2*m1*v1n) / (m1+m2)
         
-        // Apply impulse to velocities (moderate boost for nice deflection)
-        const boostFactor = 1.5; // Moderate bounce, not too crazy
-        a.vx += impulse * nx / a.mass * boostFactor;
-        a.vy += impulse * ny / a.mass * boostFactor;
-        b.vx -= impulse * nx / b.mass * boostFactor;
-        b.vy -= impulse * ny / b.mass * boostFactor;
+        const { restitution, momentumTransferRatio } = collisionConfig;
         
-        // Small minimum bounce so glancing touches have some effect
-        const minBounce = 0.8;
+        // Get velocity components along normal
+        const v1n = a.vx * nx + a.vy * ny;  // a's velocity along normal
+        const v2n = b.vx * nx + b.vy * ny;  // b's velocity along normal
+        
+        // Get velocity components perpendicular to normal (tangent)
+        const v1t = a.vx - v1n * nx;
+        const v1ty = a.vy - v1n * ny;
+        const v2t = b.vx - v2n * nx;
+        const v2ty = b.vy - v2n * ny;
+        
+        // Calculate new normal velocities using momentum conservation
+        // With restitution for energy loss
+        const m1 = aMass;
+        const m2 = bMass;
+        
+        const v1nNew = ((m1 - m2) * v1n + 2 * m2 * v2n) / (m1 + m2) * restitution;
+        const v2nNew = ((m2 - m1) * v2n + 2 * m1 * v1n) / (m1 + m2) * restitution;
+        
+        // Apply momentum transfer ratio (1.0 = full transfer, 0.5 = half)
+        const transfer = momentumTransferRatio;
+        
+        // New velocities = tangent (unchanged) + new normal component
+        a.vx = v1t + v1nNew * nx * transfer;
+        a.vy = v1ty + v1nNew * ny * transfer;
+        b.vx = v2t + v2nNew * nx * transfer;
+        b.vy = v2ty + v2nNew * ny * transfer;
+        
+        // Ensure minimum bounce velocity so collisions are visible
+        const minBounce = 1.5;
         const aSpeed = Math.sqrt(a.vx * a.vx + a.vy * a.vy);
         const bSpeed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
-        if (aSpeed < minBounce) {
+        
+        if (aSpeed < minBounce && impactSpeed > 0.5) {
+            // Give small kick in opposite direction of collision
             a.vx = -nx * minBounce * (0.8 + Math.random() * 0.4);
             a.vy = -ny * minBounce * (0.8 + Math.random() * 0.4);
         }
-        if (bSpeed < minBounce) {
+        if (bSpeed < minBounce && impactSpeed > 0.5) {
             b.vx = nx * minBounce * (0.8 + Math.random() * 0.4);
             b.vy = ny * minBounce * (0.8 + Math.random() * 0.4);
         }

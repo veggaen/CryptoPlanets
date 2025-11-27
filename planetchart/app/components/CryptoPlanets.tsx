@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback, memo, useMemo } from "react";
-import { useSearchParams, useRouter } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import {
   GalaxyState,
   GalaxyNode,
@@ -16,6 +16,7 @@ import Starfield from "./Starfield";
 import Footer from "./Footer";
 import GalaxyHUD from "./GalaxyHUD";
 import RadialMenu from "./RadialMenu";
+import MobileHUD from "./MobileHUD";
 
 // ============================================================================
 // PERFORMANCE OPTIMIZATIONS (agar.io inspired):
@@ -480,7 +481,6 @@ ParticleLayer.displayName = 'ParticleLayer';
 export default function CryptoPlanets() {
   const containerRef = useRef<HTMLDivElement>(null);
   const searchParams = useSearchParams();
-  const router = useRouter();
   
   // Track if we've processed the initial URL params
   const initialUrlProcessed = useRef(false);
@@ -512,6 +512,40 @@ export default function CryptoPlanets() {
     nodeId: string | null;
     nodeSymbol: string;
   }>({ isOpen: false, x: 0, y: 0, nodeId: null, nodeSymbol: '' });
+  
+  // Mobile detection
+  const [isMobile, setIsMobile] = useState(false);
+  
+  // Touch gesture state
+  const touchRef = useRef<{
+    startDistance: number;
+    startZoom: number;
+    startX: number;
+    startY: number;
+    lastX: number;
+    lastY: number;
+    isPinching: boolean;
+    isPanning: boolean;
+  }>({
+    startDistance: 0,
+    startZoom: 1,
+    startX: 0,
+    startY: 0,
+    lastX: 0,
+    lastY: 0,
+    isPinching: false,
+    isPanning: false,
+  });
+  
+  // Detect mobile on mount and resize
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth < 900);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
   
   // Compute the display name for the currently followed node
   const followingInfo = useMemo(() => {
@@ -545,17 +579,37 @@ export default function CryptoPlanets() {
     }
   }, [searchParams]);
 
-  // Initialize galaxy
+  // Track previous filter state to detect changes
+  const prevFiltersRef = useRef({ hideStables, hideWrapped, weightMode });
+  
+  // Initialize galaxy - only full reinit on weight mode change
+  // Filter changes use cached data for instant switch
   useEffect(() => {
+    const prevFilters = prevFiltersRef.current;
+    const isWeightModeChange = prevFilters.weightMode !== weightMode;
+    
+    // Update ref
+    prevFiltersRef.current = { hideStables, hideWrapped, weightMode };
+    
     async function init() {
-      setIsLoading(true);
+      // Only show loading spinner for weight mode changes (takes longer)
+      if (isWeightModeChange || !galaxyStateRef.current) {
+        setIsLoading(true);
+      }
+      
       try {
         const data = await loadGalaxyData(weightMode, { hideStables, hideWrapped });
         const initialState = initGalaxyState(data);
 
-        // Start zoomed out to see entire galaxy
-        setCamera({ x: 0, y: 0, zoom: 0.03 });
-        setTargetZoom(0.03);
+        // Only reset camera on fresh init or weight mode change
+        if (isWeightModeChange || !galaxyStateRef.current) {
+          setCamera({ x: 0, y: 0, zoom: 0.03 });
+          setTargetZoom(0.03);
+          // Clear follow on weight mode change
+          setFollowingId(null);
+          transitionRef.current = null;
+          setIsTransitioning(false);
+        }
 
         galaxyStateRef.current = initialState;
         setGalaxyState(initialState);
@@ -712,29 +766,54 @@ export default function CryptoPlanets() {
     setTargetZoom(idealZoom);
   }, [camera]);
 
-  // Camera wheel zoom - works even when following
+  // Camera wheel zoom - ZOOM TO CURSOR with smooth interpolation
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      const zoomFactor = e.deltaY > 0 ? 0.92 : 1.08;
+      
+      // If following, release the follow on zoom
+      if (followingId || isTransitioning) {
+        transitionRef.current = null;
+        setIsTransitioning(false);
+        setFollowingId(null);
+      }
+      
+      const rect = container.getBoundingClientRect();
+      
+      // Get mouse position relative to viewport center
+      const mouseX = e.clientX - rect.left - rect.width / 2;
+      const mouseY = e.clientY - rect.top - rect.height / 2;
+      
+      // Smoother zoom factor with smaller steps
+      const zoomFactor = e.deltaY > 0 ? 0.88 : 1.12;
       
       setCamera(prev => {
         const newZoom = Math.max(CAMERA_CONFIG.minZoom, Math.min(CAMERA_CONFIG.maxZoom, prev.zoom * zoomFactor));
-        return { ...prev, zoom: newZoom };
+        
+        // ZOOM TO CURSOR: Adjust camera position so point under cursor stays fixed
+        // Before zoom: worldX = (mouseX - camera.x) / oldZoom
+        // After zoom:  worldX = (mouseX - newCamera.x) / newZoom
+        // We want the same worldX, so:
+        // (mouseX - camera.x) / oldZoom = (mouseX - newCamera.x) / newZoom
+        // Solving: newCamera.x = mouseX - (mouseX - camera.x) * (newZoom / oldZoom)
+        
+        const zoomRatio = newZoom / prev.zoom;
+        const newX = mouseX - (mouseX - prev.x) * zoomRatio;
+        const newY = mouseY - (mouseY - prev.y) * zoomRatio;
+        
+        return { x: newX, y: newY, zoom: newZoom };
       });
       
-      // Also update target zoom if following
-      if (followingId) {
-        setTargetZoom(prev => Math.max(CAMERA_CONFIG.minZoom, Math.min(CAMERA_CONFIG.maxZoom, prev * zoomFactor)));
-      }
+      // Update target zoom for smooth interpolation
+      setTargetZoom(prev => Math.max(CAMERA_CONFIG.minZoom, Math.min(CAMERA_CONFIG.maxZoom, prev * zoomFactor)));
     };
 
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
-  }, [followingId]);
+  }, [followingId, isTransitioning]);
 
   // Drag handling
   const [isDragging, setIsDragging] = useState(false);
@@ -770,6 +849,143 @@ export default function CryptoPlanets() {
   }, [isDragging, followingId, isTransitioning]);
 
   const handleMouseUp = useCallback(() => setIsDragging(false), []);
+
+  // ============================================================================
+  // TOUCH GESTURE HANDLERS (Mobile)
+  // ============================================================================
+  
+  // Helper to get distance between two touch points
+  const getTouchDistance = useCallback((touches: React.TouchList) => {
+    if (touches.length < 2) return 0;
+    const dx = touches[0].clientX - touches[1].clientX;
+    const dy = touches[0].clientY - touches[1].clientY;
+    return Math.sqrt(dx * dx + dy * dy);
+  }, []);
+  
+  // Helper to get center point between two touches
+  const getTouchCenter = useCallback((touches: React.TouchList) => {
+    if (touches.length < 2) {
+      return { x: touches[0].clientX, y: touches[0].clientY };
+    }
+    return {
+      x: (touches[0].clientX + touches[1].clientX) / 2,
+      y: (touches[0].clientY + touches[1].clientY) / 2,
+    };
+  }, []);
+  
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    // Prevent default to avoid browser zoom/scroll
+    if (e.touches.length >= 2) {
+      e.preventDefault();
+    }
+    
+    const touch = touchRef.current;
+    
+    if (e.touches.length === 2) {
+      // Pinch zoom start
+      touch.isPinching = true;
+      touch.isPanning = false;
+      touch.startDistance = getTouchDistance(e.touches);
+      touch.startZoom = camera.zoom;
+      const center = getTouchCenter(e.touches);
+      touch.startX = center.x;
+      touch.startY = center.y;
+      touch.lastX = center.x;
+      touch.lastY = center.y;
+    } else if (e.touches.length === 1) {
+      // Single finger pan
+      touch.isPanning = true;
+      touch.isPinching = false;
+      touch.lastX = e.touches[0].clientX;
+      touch.lastY = e.touches[0].clientY;
+    }
+  }, [camera.zoom, getTouchDistance, getTouchCenter]);
+  
+  const handleTouchMove = useCallback((e: React.TouchEvent) => {
+    const touch = touchRef.current;
+    
+    if (touch.isPinching && e.touches.length === 2) {
+      e.preventDefault();
+      
+      // Release follow on pinch
+      if (followingId || isTransitioning) {
+        transitionRef.current = null;
+        setIsTransitioning(false);
+        setFollowingId(null);
+      }
+      
+      const currentDistance = getTouchDistance(e.touches);
+      const center = getTouchCenter(e.touches);
+      
+      // Calculate zoom
+      const scale = currentDistance / touch.startDistance;
+      const newZoom = Math.max(CAMERA_CONFIG.minZoom, Math.min(CAMERA_CONFIG.maxZoom, touch.startZoom * scale));
+      
+      // Get container center for zoom origin
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      
+      const centerX = rect.width / 2;
+      const centerY = rect.height / 2;
+      
+      // Pinch center relative to viewport center
+      const pinchX = touch.startX - rect.left - centerX;
+      const pinchY = touch.startY - rect.top - centerY;
+      
+      // Zoom to pinch center
+      const zoomRatio = newZoom / camera.zoom;
+      const newCamX = pinchX - (pinchX - camera.x) * zoomRatio;
+      const newCamY = pinchY - (pinchY - camera.y) * zoomRatio;
+      
+      // Also apply pan from center movement
+      const panX = center.x - touch.lastX;
+      const panY = center.y - touch.lastY;
+      
+      setCamera({
+        x: newCamX + panX,
+        y: newCamY + panY,
+        zoom: newZoom,
+      });
+      
+      touch.lastX = center.x;
+      touch.lastY = center.y;
+    } else if (touch.isPanning && e.touches.length === 1) {
+      // Single finger pan
+      const dx = e.touches[0].clientX - touch.lastX;
+      const dy = e.touches[0].clientY - touch.lastY;
+      
+      // Release follow on pan
+      if (followingId || isTransitioning) {
+        transitionRef.current = null;
+        setIsTransitioning(false);
+        setFollowingId(null);
+      }
+      
+      setCamera(prev => ({
+        ...prev,
+        x: prev.x + dx,
+        y: prev.y + dy,
+      }));
+      
+      touch.lastX = e.touches[0].clientX;
+      touch.lastY = e.touches[0].clientY;
+    }
+  }, [camera, followingId, isTransitioning, getTouchDistance, getTouchCenter]);
+  
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    const touch = touchRef.current;
+    
+    if (e.touches.length === 0) {
+      touch.isPinching = false;
+      touch.isPanning = false;
+    } else if (e.touches.length === 1) {
+      // Went from pinch to single finger
+      touch.isPinching = false;
+      touch.isPanning = true;
+      touch.lastX = e.touches[0].clientX;
+      touch.lastY = e.touches[0].clientY;
+    }
+  }, []);
 
   // Right-click context menu for sun, planets, and moons
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
@@ -894,12 +1110,15 @@ export default function CryptoPlanets() {
   return (
     <div
       ref={containerRef}
-      className="relative w-full h-screen bg-black overflow-hidden select-none"
+      className={`relative w-full h-screen bg-black overflow-hidden select-none ${isMobile ? 'no-touch-select' : ''}`}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
       onContextMenu={handleContextMenu}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
     >
       <Starfield />
 
@@ -953,158 +1172,192 @@ export default function CryptoPlanets() {
         </div>
       </div>
 
-      {/* Galaxy HUD - Chain Navigation */}
-      <GalaxyHUD
-        planets={galaxyState.planetNodes}
-        sun={galaxyState.sunNode}
-        followingId={followingId}
-        onFollowPlanet={handleFollowPlanet}
-        zoom={camera.zoom}
-      />
+      {/* Galaxy HUD - Chain Navigation (Desktop only) */}
+      {!isMobile && (
+        <GalaxyHUD
+          planets={galaxyState.planetNodes}
+          sun={galaxyState.sunNode}
+          followingId={followingId}
+          onFollowPlanet={handleFollowPlanet}
+          zoom={camera.zoom}
+        />
+      )}
+      
+      {/* Mobile HUD */}
+      {isMobile && (
+        <MobileHUD
+          planets={galaxyState.planetNodes}
+          sun={galaxyState.sunNode}
+          followingId={followingId}
+          onFollowPlanet={handleFollowPlanet}
+          zoom={camera.zoom}
+          weightMode={weightMode}
+          onWeightModeChange={(newMode) => {
+            setWeightMode(newMode);
+            const url = new URL(window.location.href);
+            if (newMode !== 'MarketCap') {
+              url.searchParams.set('metric', newMode);
+            } else {
+              url.searchParams.delete('metric');
+            }
+            window.history.replaceState({}, '', url.toString());
+          }}
+          hideStables={hideStables}
+          hideWrapped={hideWrapped}
+          onToggleStables={() => setHideStables(!hideStables)}
+          onToggleWrapped={() => setHideWrapped(!hideWrapped)}
+          followingInfo={followingInfo}
+        />
+      )}
 
-      {/* Radial Context Menu */}
-      <RadialMenu
-        isOpen={radialMenu.isOpen}
-        x={radialMenu.x}
-        y={radialMenu.y}
-        items={getRadialMenuItems()}
-        onClose={() => setRadialMenu(prev => ({ ...prev, isOpen: false }))}
-        title={radialMenu.nodeSymbol}
-      />
+      {/* Radial Context Menu (Desktop only - mobile uses tap menu) */}
+      {!isMobile && (
+        <RadialMenu
+          isOpen={radialMenu.isOpen}
+          x={radialMenu.x}
+          y={radialMenu.y}
+          items={getRadialMenuItems()}
+          onClose={() => setRadialMenu(prev => ({ ...prev, isOpen: false }))}
+          title={radialMenu.nodeSymbol}
+        />
+      )}
 
-      {/* UI Overlay */}
-      <div className="absolute top-0 left-0 w-full h-full pointer-events-none p-6 flex flex-col justify-between z-40">
-        <div className="flex items-start justify-between">
-          <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 ml-48">
-            <h1 className="text-2xl font-bold text-white mb-2">Crypto Galaxy</h1>
-            <p className="text-sm text-white/60">Real-time blockchain visualization</p>
-          </div>
+      {/* UI Overlay (Desktop only) */}
+      {!isMobile && (
+        <div className="absolute top-0 left-0 w-full h-full pointer-events-none p-6 flex flex-col justify-between z-40">
+          <div className="flex items-start justify-between">
+            <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 ml-48">
+              <h1 className="text-2xl font-bold text-white mb-2">Crypto Galaxy</h1>
+              <p className="text-sm text-white/60">Real-time blockchain visualization</p>
+            </div>
 
-          {/* Prominent Following Indicator - Center Top */}
-          {followingInfo && (
-            <div className={`absolute top-6 left-1/2 -translate-x-1/2 backdrop-blur-md rounded-full px-6 py-2 border flex items-center gap-3 transition-all duration-300 ${
-              isTransitioning 
-                ? 'bg-purple-500/20 border-purple-400/50' 
-                : 'bg-cyan-500/20 border-cyan-400/50'
-            }`}>
-              <span className={`w-3 h-3 rounded-full animate-pulse ${
-                isTransitioning ? 'bg-purple-400' : 'bg-cyan-400'
-              }`} />
-              <span className={`font-semibold text-sm ${
-                isTransitioning ? 'text-purple-300' : 'text-cyan-300'
+            {/* Prominent Following Indicator - Center Top */}
+            {followingInfo && (
+              <div className={`absolute top-6 left-1/2 -translate-x-1/2 backdrop-blur-md rounded-full px-6 py-2 border flex items-center gap-3 transition-all duration-300 ${
+                isTransitioning 
+                  ? 'bg-purple-500/20 border-purple-400/50' 
+                  : 'bg-cyan-500/20 border-cyan-400/50'
               }`}>
-                {isTransitioning ? 'Navigating to: ' : 'Following: '}{followingInfo.symbol}
-              </span>
-              
-              {/* Copy Link Button */}
+                <span className={`w-3 h-3 rounded-full animate-pulse ${
+                  isTransitioning ? 'bg-purple-400' : 'bg-cyan-400'
+                }`} />
+                <span className={`font-semibold text-sm ${
+                  isTransitioning ? 'text-purple-300' : 'text-cyan-300'
+                }`}>
+                  {isTransitioning ? 'Navigating to: ' : 'Following: '}{followingInfo.symbol}
+                </span>
+                
+                {/* Copy Link Button */}
+                <button
+                  onClick={() => {
+                    navigator.clipboard.writeText(window.location.href);
+                    setLinkCopied(true);
+                    setTimeout(() => setLinkCopied(false), 2000);
+                  }}
+                  className="pointer-events-auto text-cyan-400/60 hover:text-green-400 transition-colors text-xs flex items-center gap-1"
+                  title="Copy shareable link"
+                >
+                  {linkCopied ? (
+                    <span className="text-green-400">Copied!</span>
+                  ) : (
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                    </svg>
+                  )}
+                </button>
+                
+                <button
+                  onClick={() => handleFollowPlanet(null)}
+                  className="pointer-events-auto text-cyan-400/60 hover:text-red-400 transition-colors ml-1 text-xs"
+                  title="Release follow"
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+
+            <select
+              className="pointer-events-auto bg-black/50 backdrop-blur-md border border-white/10 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-black/70 transition-colors"
+              value={weightMode}
+              onChange={(e) => {
+                const newMode = e.target.value as WeightMode;
+                setWeightMode(newMode);
+                
+                // Update URL with metric param
+                const url = new URL(window.location.href);
+                if (newMode !== 'MarketCap') {
+                  url.searchParams.set('metric', newMode);
+                } else {
+                  url.searchParams.delete('metric');
+                }
+                window.history.replaceState({}, '', url.toString());
+              }}
+            >
+              <option value="TVL"> TVL</option>
+              <option value="MarketCap">Size by Market Cap</option>
+              <option value="Volume24h">Size by 24h Volume</option>
+              <option value="Change24h">Size by 24h Change</option>
+            </select>
+            
+            {/* Token Filter Toggles */}
+            <div className="flex gap-2 pointer-events-auto">
               <button
-                onClick={() => {
-                  navigator.clipboard.writeText(window.location.href);
-                  setLinkCopied(true);
-                  setTimeout(() => setLinkCopied(false), 2000);
-                }}
-                className="pointer-events-auto text-cyan-400/60 hover:text-green-400 transition-colors text-xs flex items-center gap-1"
-                title="Copy shareable link"
+                onClick={() => setHideStables(!hideStables)}
+                className={`px-3 py-2 rounded-lg text-xs font-medium transition-all backdrop-blur-md border ${
+                  hideStables 
+                    ? 'bg-red-500/20 border-red-400/30 text-red-300' 
+                    : 'bg-green-500/20 border-green-400/30 text-green-300'
+                }`}
+                title={hideStables ? "Stablecoins hidden - click to show" : "Stablecoins visible - click to hide"}
               >
-                {linkCopied ? (
-                  <span className="text-green-400">Copied!</span>
-                ) : (
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
-                  </svg>
-                )}
+                {hideStables ? '🚫' : '✅'} Stables
               </button>
-              
               <button
-                onClick={() => handleFollowPlanet(null)}
-                className="pointer-events-auto text-cyan-400/60 hover:text-red-400 transition-colors ml-1 text-xs"
-                title="Release follow"
+                onClick={() => setHideWrapped(!hideWrapped)}
+                className={`px-3 py-2 rounded-lg text-xs font-medium transition-all backdrop-blur-md border ${
+                  hideWrapped 
+                    ? 'bg-red-500/20 border-red-400/30 text-red-300' 
+                    : 'bg-green-500/20 border-green-400/30 text-green-300'
+                }`}
+                title={hideWrapped ? "Wrapped tokens hidden - click to show" : "Wrapped tokens visible - click to hide"}
               >
-                ✕
+                {hideWrapped ? '🚫' : '✅'} Wrapped
               </button>
             </div>
-          )}
+          </div>
 
-          <select
-            className="pointer-events-auto bg-black/50 backdrop-blur-md border border-white/10 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-black/70 transition-colors"
-            value={weightMode}
-            onChange={(e) => {
-              const newMode = e.target.value as WeightMode;
-              setWeightMode(newMode);
-              
-              // Update URL with metric param
-              const url = new URL(window.location.href);
-              if (newMode !== 'MarketCap') {
-                url.searchParams.set('metric', newMode);
-              } else {
-                url.searchParams.delete('metric');
-              }
-              window.history.replaceState({}, '', url.toString());
-            }}
-          >
-            <option value="TVL"> TVL</option>
-            <option value="MarketCap">Size by Market Cap</option>
-            <option value="Volume24h">Size by 24h Volume</option>
-            <option value="Change4h">Size by 4h Change</option>
-          </select>
-          
-          {/* Token Filter Toggles */}
-          <div className="flex gap-2 pointer-events-auto">
-            <button
-              onClick={() => setHideStables(!hideStables)}
-              className={`px-3 py-2 rounded-lg text-xs font-medium transition-all backdrop-blur-md border ${
-                hideStables 
-                  ? 'bg-red-500/20 border-red-400/30 text-red-300' 
-                  : 'bg-green-500/20 border-green-400/30 text-green-300'
-              }`}
-              title={hideStables ? "Stablecoins hidden - click to show" : "Stablecoins visible - click to hide"}
-            >
-              {hideStables ? '🚫' : '✅'} Stables
-            </button>
-            <button
-              onClick={() => setHideWrapped(!hideWrapped)}
-              className={`px-3 py-2 rounded-lg text-xs font-medium transition-all backdrop-blur-md border ${
-                hideWrapped 
-                  ? 'bg-red-500/20 border-red-400/30 text-red-300' 
-                  : 'bg-green-500/20 border-green-400/30 text-green-300'
-              }`}
-              title={hideWrapped ? "Wrapped tokens hidden - click to show" : "Wrapped tokens visible - click to hide"}
-            >
-              {hideWrapped ? '🚫' : '✅'} Wrapped
-            </button>
+          <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 max-w-xs ml-48">
+            <div className="text-xs text-white/60 mb-2">Camera Controls</div>
+            <div className="text-xs text-white/80 space-y-1">
+              <div>🖱️ Drag to pan {(followingId || isTransitioning) && <span className="text-yellow-400">(cancels)</span>}</div>
+              <div>🔍 Scroll to zoom</div>
+              <div>👆 Click chain in HUD for cinematic travel</div>
+              <div>🖱️ Right-click any object for menu</div>
+            </div>
+            <div className="text-xs mt-2">
+              {isTransitioning ? (
+                <span className="flex items-center gap-1 text-purple-400">
+                  <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
+                  Swooshing to: {followingInfo?.symbol}
+                </span>
+              ) : followingInfo ? (
+                <span className="flex items-center gap-1 text-cyan-400">
+                  <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                  Following: {followingInfo.symbol} ({followingInfo.type})
+                </span>
+              ) : (
+                <span className="text-white/40">Free camera</span>
+              )}
+            </div>
+            <div className="text-xs text-white/40 mt-1">
+              Zoom: {(camera.zoom * 100).toFixed(1)}%
+            </div>
           </div>
         </div>
+      )}
 
-        <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 max-w-xs ml-48">
-          <div className="text-xs text-white/60 mb-2">Camera Controls</div>
-          <div className="text-xs text-white/80 space-y-1">
-            <div>🖱️ Drag to pan {(followingId || isTransitioning) && <span className="text-yellow-400">(cancels)</span>}</div>
-            <div>🔍 Scroll to zoom</div>
-            <div>👆 Click chain in HUD for cinematic travel</div>
-            <div>🖱️ Right-click any object for menu</div>
-          </div>
-          <div className="text-xs mt-2">
-            {isTransitioning ? (
-              <span className="flex items-center gap-1 text-purple-400">
-                <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
-                Swooshing to: {followingInfo?.symbol}
-              </span>
-            ) : followingInfo ? (
-              <span className="flex items-center gap-1 text-cyan-400">
-                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-                Following: {followingInfo.symbol} ({followingInfo.type})
-              </span>
-            ) : (
-              <span className="text-white/40">Free camera</span>
-            )}
-          </div>
-          <div className="text-xs text-white/40 mt-1">
-            Zoom: {(camera.zoom * 100).toFixed(1)}%
-          </div>
-        </div>
-      </div>
-
-      <Footer />
+      {/* Footer (Desktop only) */}
+      {!isMobile && <Footer />}
     </div>
   );
 }

@@ -53,8 +53,8 @@ export const physicsConfig = {
     planetSafetyPadding: 1800,      // Extra padding between planet systems (px) - 9x
 
     // ===== Token/Moon Orbit ===== - 9x SCALE
-    baseMoonOrbitRadius: 1080,      // Starting radius for moon belt from planet edge (px) - 9x FAR from planet
-    moonOrbitRadiusVariance: 800,   // Random variance in orbit radius (px) - creates messy field
+    baseMoonOrbitRadius: 1080,      // Starting radius for moon belt from planet edge (px) - 9x
+    moonOrbitRadiusVariance: 720,   // Random variance in orbit radius (px) - 9x creates messy field
     moonOrbitEccentricity: 0.25,    // Max orbit eccentricity (0 = circle, 1 = very elliptical)
 
     // ===== Moon Ring System =====
