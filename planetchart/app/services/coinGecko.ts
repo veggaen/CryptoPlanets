@@ -149,7 +149,7 @@ export async function fetchBTCStats(): Promise<BTCData> {
 
         // Update cache
         btcCache = { data: btcData, lastFetched: now };
-        debugLog('data', '✅ Fetched fresh BTC data from CoinGecko');
+        debugLog('data', 'OK: Fetched fresh BTC data from CoinGecko');
 
         return btcData;
     } catch (error) {
@@ -207,7 +207,7 @@ export async function fetchEcosystemTokensFromCoinGecko(
         debugLog('data', `Fetching ${limit} ecosystem tokens for ${categoryId} from: ${url}`);
 
         // Add API key if available
-        const apiKey = process.env.COINGECKO_API_KEY || process.env.NEXT_PUBLIC_COINGECKO_API_KEY;
+        const apiKey = process.env.COINGECKO_API_KEY;
         const headers: HeadersInit = apiKey ? { 'x-cg-demo-api-key': apiKey } : {};
 
         const response = await fetch(url, { headers });
@@ -253,7 +253,7 @@ export async function fetchEcosystemTokensFromCoinGecko(
 
         // Update cache
         ecosystemTokensCache[categoryId] = { data: tokens, lastFetched: now };
-        debugLog('data', `✅ Fetched ${tokens.length} fresh ecosystem tokens for ${categoryId}`);
+        debugLog('data', `OK: Fetched ${tokens.length} fresh ecosystem tokens for ${categoryId}`);
 
         return tokens;
     } catch (error) {
@@ -297,7 +297,7 @@ export async function fetchCoinsPrices(coinIds: string[]): Promise<Record<string
         debugLog('data', `Fetching prices for coins: ${ids}`);
 
         // Add API key if available
-        const apiKey = process.env.COINGECKO_API_KEY || process.env.NEXT_PUBLIC_COINGECKO_API_KEY;
+        const apiKey = process.env.COINGECKO_API_KEY;
         const headers: HeadersInit = apiKey ? { 'x-cg-demo-api-key': apiKey } : {};
 
         const response = await fetch(url, { headers });
@@ -322,7 +322,7 @@ export async function fetchCoinsPrices(coinIds: string[]): Promise<Record<string
             }
         });
 
-        debugLog('data', `✅ Fetched ${Object.keys(prices).length} coin prices`);
+        debugLog('data', `OK: Fetched ${Object.keys(prices).length} coin prices`);
         return prices;
     } catch (error) {
         debugLog('data', `Error fetching coin prices: ${error}`);
@@ -361,7 +361,7 @@ export async function fetchSpecificTokens(tokenIds: string[]): Promise<TokenData
         debugLog('data', `Fetching specific tokens from: ${url}`);
 
         // Add API key if available
-        const apiKey = process.env.COINGECKO_API_KEY || process.env.NEXT_PUBLIC_COINGECKO_API_KEY;
+        const apiKey = process.env.COINGECKO_API_KEY;
         if (apiKey) {
             debugLog('data', `Using CoinGecko API Key: ${apiKey.substring(0, 4)}...`);
         } else {
@@ -373,9 +373,9 @@ export async function fetchSpecificTokens(tokenIds: string[]): Promise<TokenData
 
         if (!response.ok) {
             if (response.status === 429) {
-                debugLog('data', `CoinGecko rate limit hit (429) for specific tokens`);
+                console.error(`[CoinGecko] ERROR: Rate limit hit (429) for specific tokens - check if COINGECKO_API_KEY is set`);
             } else {
-                debugLog('data', `CoinGecko API error for specific tokens: ${response.status} ${response.statusText}`);
+                console.error(`[CoinGecko] ERROR: API error for specific tokens: ${response.status} ${response.statusText}`);
             }
             return [];
         }
@@ -400,7 +400,7 @@ export async function fetchSpecificTokens(tokenIds: string[]): Promise<TokenData
             };
         });
 
-        debugLog('data', `✅ Fetched ${tokens.length} specific priority tokens (using FDV fallback for market_cap=0)`);
+        debugLog('data', `OK: Fetched ${tokens.length} specific priority tokens (using FDV fallback for market_cap=0)`);
         return tokens;
 
     } catch (error) {
@@ -420,7 +420,7 @@ export async function fetchCoinIcons(coinIds: string[]): Promise<Record<string, 
         const ids = coinIds.join(',');
         const url = `${dataConfig.coinGecko.baseURL}${dataConfig.coinGecko.endpoints.markets}?vs_currency=usd&ids=${encodeURIComponent(ids)}&order=market_cap_desc&per_page=${coinIds.length}&page=1&sparkline=false`;
         
-        const apiKey = process.env.COINGECKO_API_KEY || process.env.NEXT_PUBLIC_COINGECKO_API_KEY;
+        const apiKey = process.env.COINGECKO_API_KEY;
         const headers: HeadersInit = apiKey ? { 'x-cg-demo-api-key': apiKey } : {};
 
         const response = await fetch(url, { headers });
@@ -439,7 +439,7 @@ export async function fetchCoinIcons(coinIds: string[]): Promise<Record<string, 
             }
         });
 
-        debugLog('data', `✅ Fetched ${Object.keys(icons).length} coin icons`);
+        debugLog('data', `Fetched ${Object.keys(icons).length} coin icons`);
         return icons;
     } catch (error) {
         debugLog('data', `Error fetching coin icons: ${error}`);

@@ -121,7 +121,7 @@ export const coinGeckoMarketSchema = z.object({
 export function validateGalaxyData(data: unknown): asserts data is GalaxyData {
     try {
         galaxyDataSchema.parse(data);
-        debugLog('data', '✅ GalaxyData validation passed');
+        debugLog('data', 'OK: GalaxyData validation passed');
     } catch (error) {
         if (error instanceof ZodError) {
             const issues = error.issues || [];
@@ -139,7 +139,7 @@ export function validateGalaxyData(data: unknown): asserts data is GalaxyData {
 export function validateBTCData(data: unknown): asserts data is BTCData {
     try {
         btcDataSchema.parse(data);
-        debugLog('data', '✅ BTCData validation passed');
+        debugLog('data', 'OK: BTCData validation passed');
     } catch (error) {
         if (error instanceof ZodError) {
             const zError = error as any;
@@ -156,7 +156,7 @@ export function validateBTCData(data: unknown): asserts data is BTCData {
 export function validateChainData(data: unknown): asserts data is ChainData {
     try {
         chainDataSchema.parse(data);
-        debugLog('data', '✅ ChainData validation passed');
+        debugLog('data', 'OK: ChainData validation passed');
     } catch (error) {
         if (error instanceof ZodError) {
             const zError = error as any;
@@ -173,7 +173,7 @@ export function validateChainData(data: unknown): asserts data is ChainData {
 export function validateTokens(data: unknown): asserts data is TokenData[] {
     try {
         z.array(tokenDataSchema).parse(data);
-        debugLog('data', `✅ Validated ${(data as any[]).length} tokens`);
+        debugLog('data', `OK: Validated ${(data as any[]).length} tokens`);
     } catch (error) {
         if (error instanceof ZodError) {
             const zError = error as any;
@@ -194,7 +194,7 @@ export function validateDefiLlamaChains(data: unknown): asserts data is DefiLlam
         console.error('[VALIDATION ERROR] DefiLlama response failed:', JSON.stringify(zError.format(), null, 2));
         throw new Error(`DefiLlama validation failed: ${zError.errors[0]?.message || 'Unknown error'}`);
     }
-    debugLog('data', `✅ Validated ${(data as any[]).length} DefiLlama chains`);
+    debugLog('data', `OK: Validated ${(data as any[]).length} DefiLlama chains`);
 }
 
 /**
@@ -203,7 +203,7 @@ export function validateDefiLlamaChains(data: unknown): asserts data is DefiLlam
 export function validateDexScreenerTokens(data: unknown): asserts data is DexScreenerToken[] {
     try {
         z.array(dexScreenerTokenSchema).parse(data);
-        debugLog('data', `✅ Validated ${(data as any[]).length} DexScreener tokens`);
+        debugLog('data', `OK: Validated ${(data as any[]).length} DexScreener tokens`);
     } catch (error) {
         if (error instanceof ZodError) {
             const zError = error as any;
@@ -220,7 +220,7 @@ export function validateDexScreenerTokens(data: unknown): asserts data is DexScr
 export function validateCoinGeckoMarkets(data: unknown): asserts data is CoinGeckoMarket[] {
     try {
         z.array(coinGeckoMarketSchema).parse(data);
-        debugLog('data', `✅ Validated ${(data as any[]).length} CoinGecko markets`);
+        debugLog('data', `OK: Validated ${(data as any[]).length} CoinGecko markets`);
     } catch (error) {
         if (error instanceof ZodError) {
             const zError = error as any;

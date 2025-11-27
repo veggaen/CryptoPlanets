@@ -13,7 +13,7 @@ if (fs.existsSync(envPath)) {
 
 async function testApi() {
     console.log("Testing CoinGecko API (Standalone)...");
-    const apiKey = process.env.COINGECKO_API_KEY || process.env.NEXT_PUBLIC_COINGECKO_API_KEY;
+    const apiKey = process.env.COINGECKO_API_KEY;
 
     if (apiKey) {
         console.log(`API Key found: ${apiKey.substring(0, 4)}...`);

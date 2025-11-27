@@ -1,191 +1,97 @@
-import { GalaxyData, WeightMode, ChainData } from "@/types/galaxy";
-import { fetchChainsTVL } from "./defiLlama";
-import { fetchHEXData } from "./dexScreener";
-import { fetchBTCStats } from "./coinGecko";
-import { dataConfig, CHAIN_TOKENS, CHAIN_NATIVE_SYMBOLS, STABLECOIN_SYMBOLS, WRAPPED_PATTERNS } from "@/config/dataConfig";
+/**
+ * Galaxy Data Loader - Client-Side
+ * 
+ * This module fetches galaxy data from our INTERNAL API endpoint (/api/galaxy)
+ * which handles all caching and external API calls server-side.
+ * 
+ * IMPORTANT: This file should NEVER call external APIs (CoinGecko, DefiLlama, etc.) directly!
+ * All external API calls are centralized in /api/galaxy/route.ts
+ */
+
+import { GalaxyData, WeightMode } from "@/types/galaxy";
 import { debugLog } from "@/utils/debug";
-import { validateGalaxyData } from "@/utils/validation";
 
-// ===== HELPER FUNCTIONS =====
+// ===== CLIENT-SIDE CONFIGURATION =====
+const API_TIMEOUT_MS = 15_000;    // Timeout for API requests
 
-/** Check if a symbol is a stablecoin */
-function isStable(symbol: string): boolean {
-    return STABLECOIN_SYMBOLS.has(symbol.toUpperCase());
-}
-
-/** Check if a symbol is a wrapped/derivative token */
-function isWrapped(symbol: string): boolean {
-    return WRAPPED_PATTERNS.has(symbol.toUpperCase());
-}
-
-/** Check if a symbol is a chain native token (should be planet, not moon) */
-function isChainNative(symbol: string): boolean {
-    return CHAIN_NATIVE_SYMBOLS.has(symbol.toUpperCase());
-}
-
+// ===== MAIN DATA LOADER =====
 export async function loadGalaxyData(weightMode: WeightMode): Promise<GalaxyData> {
     debugLog('data', `Loading galaxy data with weight mode: ${weightMode}`);
 
     try {
-        // 1. Fetch Core Data (Parallel)
-        const [btcData, chains, pulseChain] = await Promise.all([
-            fetchBTCStats(),
-            fetchChainsTVL(),
-            import('./pulseChain').then(m => m.getPulseChainData())
-        ]);
+        // Determine the API URL (works both client and server side)
+        const baseUrl = typeof window !== 'undefined' 
+            ? '' // Client-side: relative URL
+            : (process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'); // Server-side
+        
+        const url = `${baseUrl}/api/galaxy?mode=${encodeURIComponent(weightMode)}`;
+        
+        debugLog('data', `Fetching from internal API: ${url}`);
 
-        // Add PulseChain to chains list if not present
-        const allChains = [...chains];
-        if (!allChains.find(c => c.id === 'pulsechain')) {
-            allChains.push(pulseChain);
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+
+        const response = await fetch(url, {
+            method: 'GET',
+            headers: {
+                'Accept': 'application/json',
+            },
+            signal: controller.signal,
+        });
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+            throw new Error(`API error: ${response.status} ${response.statusText}`);
         }
 
-        // 2. Sort & Filter Chains
-        const weightedChains = allChains
-            .map(chain => ({
-                ...chain,
-                weight: calculateWeight(chain, weightMode),
-            }))
-            .sort((a, b) => b.weight - a.weight)
-            .slice(0, dataConfig.maxChains);
+        const result = await response.json();
 
-        // 3. Fetch Prices and Icons (Batch)
-        const geckoIds = weightedChains
-            .map(c => c.geckoId)
-            .filter((id): id is string => id !== undefined && id !== null);
+        if (!result.success) {
+            throw new Error(result.error || 'Unknown API error');
+        }
 
-        debugLog('data', `Fetching prices and icons for ${geckoIds.length} chains`);
-        const { fetchCoinsPrices, fetchCoinIcons } = await import('./coinGecko');
-        const [chainPrices, chainIcons] = await Promise.all([
-            fetchCoinsPrices(geckoIds),
-            fetchCoinIcons(geckoIds)
-        ]);
+        // Log cache status for debugging
+        if (result.source === 'cache') {
+            debugLog('data', `Using cached data (age: ${Math.round(result.cacheAge / 1000)}s)`);
+        } else if (result.source === 'stale-cache') {
+            debugLog('data', `Using STALE cached data (age: ${Math.round(result.cacheAge / 1000)}s) - API had error`);
+            console.warn('[DATA] Using stale cache:', result.warning);
+        } else {
+            debugLog('data', 'Got fresh data from API');
+        }
 
-        // Apply chain prices and icons to weighted chains
-        weightedChains.forEach(chain => {
-            if (chain.geckoId) {
-                if (chainPrices[chain.geckoId]) {
-                    chain.price = chainPrices[chain.geckoId];
-                }
-                if (chainIcons[chain.geckoId]) {
-                    chain.icon = chainIcons[chain.geckoId];
-                }
-            }
-        });
-
-        const totalVal = btcData.marketCap + allChains.reduce((sum, c) => sum + c.tvl, 0);
-
-        // Fetch HEX data from DexScreener (CoinGecko has broken market cap data for HEX)
-        const hexData = await fetchHEXData();
-
-        // 4. Fetch Tokens using CURATED CHAIN_TOKENS list
-        const chainsWithTokens = await Promise.all(
-            weightedChains.map(async (chain) => {
-                // Get the curated token list for this chain
-                const curatedTokenIds = CHAIN_TOKENS[chain.id];
-                
-                if (!curatedTokenIds || curatedTokenIds.length === 0) {
-                    debugLog('data', `No curated tokens for chain ${chain.id}`);
-                    return { ...chain, tokens: [] };
-                }
-
-                // Filter out HEX IDs - we'll add HEX from DexScreener separately
-                const tokenIdsWithoutHex = curatedTokenIds.filter(id => 
-                    id !== 'hex' && id !== 'hex-pulsechain'
-                );
-
-                // Fetch tokens from CoinGecko using the curated IDs
-                let tokens: any[] = [];
-                if (tokenIdsWithoutHex.length > 0) {
-                    debugLog('data', `Fetching ${tokenIdsWithoutHex.length} curated tokens for ${chain.id}`);
-                    const { fetchSpecificTokens } = await import("./coinGecko");
-                    tokens = await fetchSpecificTokens(tokenIdsWithoutHex);
-                    debugLog('data', `Got ${tokens.length} tokens for ${chain.id}`);
-                }
-
-                // Apply final safety filters (in case CoinGecko returns something weird)
-                tokens = tokens.filter(t => {
-                    const symbol = (t.symbol || "").toUpperCase();
-                    if (!symbol) return false;
-                    if (isStable(symbol)) return false;
-                    if (isWrapped(symbol)) return false;
-                    if (isChainNative(symbol)) return false;
-                    return true;
-                });
-
-                // Sort by marketCap descending
-                tokens = tokens.sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0));
-
-                // Limit to configured max
-                tokens = tokens.slice(0, dataConfig.tokensPerChain);
-
-                // ===== ADD HEX FROM DEXSCREENER =====
-                // CoinGecko has broken market_cap data for HEX, so we use DexScreener
-                if (chain.id === 'ethereum' && hexData.eHEX) {
-                    // Remove any existing HEX entry (shouldn't happen with curated list, but safety check)
-                    tokens = tokens.filter(t => t.symbol?.toUpperCase() !== 'HEX');
-                    // Add eHEX at the front (high priority)
-                    tokens.unshift(hexData.eHEX);
-                    console.log('[HEX] ✅ Added eHEX to Ethereum:', hexData.eHEX.symbol, hexData.eHEX.marketCap);
-                } else if (chain.id === 'pulsechain' && hexData.pHEX) {
-                    tokens = tokens.filter(t => t.symbol?.toUpperCase() !== 'HEX');
-                    tokens.unshift(hexData.pHEX);
-                    console.log('[HEX] ✅ Added pHEX to PulseChain:', hexData.pHEX.symbol, hexData.pHEX.marketCap);
-                }
-
-                console.log(`[${chain.id.toUpperCase()}] Final tokens:`, tokens.map(t => t.symbol).join(', '));
-
-                return { ...chain, tokens };
-            })
-        );
-
-        // 5. Calculate Dominance
-        btcData.dominance = (btcData.marketCap / totalVal) * 100;
-        chainsWithTokens.forEach(c => {
-            c.dominance = (c.tvl / totalVal) * 100;
-        });
-
+        // Convert lastUpdated string back to Date
         const galaxyData: GalaxyData = {
-            btc: btcData,
-            chains: chainsWithTokens,
-            lastUpdated: new Date(),
-            totalMarketCap: totalVal,
-            metric: weightMode,
+            ...result.data,
+            lastUpdated: new Date(result.data.lastUpdated),
         };
 
-        validateGalaxyData(galaxyData);
-        debugLog('data', `Loaded ${galaxyData.chains.length} chains with real data`);
-
+        debugLog('data', `Loaded ${galaxyData.chains.length} chains`);
         return galaxyData;
 
     } catch (error) {
         console.error('[DATA ERROR]', error);
-        return getFallbackData();
+        
+        // Return fallback data so the app doesn't crash
+        return getFallbackData(weightMode);
     }
 }
 
-function calculateWeight(chain: ChainData, mode: WeightMode): number {
-    switch (mode) {
-        case 'TVL': return chain.tvl;
-        // Use TVL as proxy for Chain Market Cap if not explicitly available (DefiLlama doesn't give Chain MC easily)
-        // But for ordering, TVL is often a good enough proxy for "DeFi Size". 
-        // If we had real Chain MC (e.g. ETH MC), we should use it.
-        // We do fetch 'price' for the chain. If we had circulating supply, we could calc MC.
-        // For now, let's stick to TVL for chains, but maybe boost it?
-        // Actually, let's use TVL as the primary weight for "Size" in the galaxy unless we have a better metric.
-        case 'MarketCap': return chain.tvl;
-        case 'Volume24h': return chain.volume24h;
-        case 'Change24h': return Math.abs(chain.change24h);
-        default: return chain.tvl;
-    }
-}
-
-function getFallbackData(): GalaxyData {
+// ===== FALLBACK DATA =====
+function getFallbackData(weightMode: WeightMode): GalaxyData {
+    console.warn('[DATA] Using fallback data - API unavailable');
     return {
-        btc: { price: 60000, change24h: 0, dominance: 50, marketCap: 1000000000000, volume24h: 0 },
+        btc: { 
+            price: 91000, 
+            change24h: 0, 
+            dominance: 50, 
+            marketCap: 1800000000000, 
+            volume24h: 30000000000 
+        },
         chains: [],
         lastUpdated: new Date(),
-        totalMarketCap: 2000000000000,
-        metric: "TVL"
+        totalMarketCap: 3500000000000,
+        metric: weightMode,
     };
 }

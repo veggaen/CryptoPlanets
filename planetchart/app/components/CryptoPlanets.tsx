@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useMemo, useCallback, memo } from "react";
+import { useEffect, useRef, useState, useCallback, memo } from "react";
 import {
   GalaxyState,
   GalaxyNode,
@@ -8,7 +8,6 @@ import {
 } from "@/types/galaxy";
 import { loadGalaxyData } from "@/services/dataLoader";
 import { initGalaxyState, tickGalaxy } from "@/physics/galaxyEngine";
-import { physicsConfig } from "@/config/physicsConfig";
 import Starfield from "./Starfield";
 import Footer from "./Footer";
 
@@ -361,14 +360,24 @@ export default function CryptoPlanets() {
   }, []);
 
   // Camera handlers - SMOOTH proportional zoom
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    // Proportional zoom: multiply by factor for smooth feel
-    const zoomFactor = e.deltaY > 0 ? 0.92 : 1.08; // 8% per scroll step
-    setCamera(prev => ({
-      ...prev,
-      zoom: Math.max(minZoom, Math.min(10, prev.zoom * zoomFactor))
-    }));
+  // Use native event listener to set passive:false (React synthetic events are passive)
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      // Proportional zoom: multiply by factor for smooth feel
+      const zoomFactor = e.deltaY > 0 ? 0.92 : 1.08; // 8% per scroll step
+      setCamera(prev => ({
+        ...prev,
+        zoom: Math.max(minZoom, Math.min(10, prev.zoom * zoomFactor))
+      }));
+    };
+
+    // Add event listener with passive:false to allow preventDefault
+    container.addEventListener('wheel', handleWheel, { passive: false });
+    return () => container.removeEventListener('wheel', handleWheel);
   }, [minZoom]);
 
   const [isDragging, setIsDragging] = useState(false);
@@ -407,7 +416,6 @@ export default function CryptoPlanets() {
     <div
       ref={containerRef}
       className="relative w-full h-screen bg-black overflow-hidden select-none"
-      onWheel={handleWheel}
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}

@@ -83,9 +83,9 @@ export async function fetchHEXData(): Promise<{ eHEX: TokenData | null, pHEX: To
                 color: getTokenColor(change24h),
                 icon: bestEthPair.info?.imageUrl || "https://coin-images.coingecko.com/coins/images/10103/large/HEX-logo.png",
             };
-            console.log('[HEX] ✅ Created eHEX:', { price: eHEX.price, mc: eHEX.marketCap });
+            console.log('[HEX] OK: Created eHEX:', { price: eHEX.price, mc: eHEX.marketCap });
         } else {
-            console.log('[HEX] ❌ No Ethereum pairs found!');
+            console.log('[HEX] ERROR: No Ethereum pairs found!');
         }
 
         if (bestPlsPair) {
@@ -103,13 +103,13 @@ export async function fetchHEXData(): Promise<{ eHEX: TokenData | null, pHEX: To
                 color: getTokenColor(change24h),
                 icon: bestPlsPair.info?.imageUrl || "https://coin-images.coingecko.com/coins/images/10103/large/HEX-logo.png",
             };
-            console.log('[HEX] ✅ Created pHEX:', { price: pHEX.price, mc: pHEX.marketCap });
+            console.log('[HEX] OK: Created pHEX:', { price: pHEX.price, mc: pHEX.marketCap });
         }
 
         // Update cache
         hexCache = { data: { eHEX, pHEX }, timestamp: now };
 
-        debugLog('data', '✅ Fetched HEX data from DexScreener (accurate market cap)');
+        debugLog('data', 'OK: Fetched HEX data from DexScreener (accurate market cap)');
         return { eHEX, pHEX };
 
     } catch (error) {
