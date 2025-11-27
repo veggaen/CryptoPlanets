@@ -33,6 +33,11 @@ export const uiConfig = {
     trailOpacity: 0.2,              // Opacity of orbital trails
     trailWidth: 1,                  // Width of orbital trail lines (px)
 
+    // ===== Text Colors =====
+    planetTickerColor: "#ffffff",    // Planet/moon ticker symbol color
+    planetPriceColor: "#22c55e",     // Planet/moon price text color (green)
+    planetSizeRatioColor: "#60a5fa", // Planet/moon size ratio text color (blue)
+
     // ===== Interaction =====
     hoverScalePlanet: 1.04,         // Scale multiplier on planet hover
     hoverScaleToken: 1.1,           // Scale multiplier on token hover

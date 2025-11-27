@@ -241,6 +241,69 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
         }
     });
 
+    // --- Compute size ratios ---
+    // Planets compare to next-largest planet
+    // Moons compare to next-largest moon on the SAME chain
+    // Sun compares to largest planet
+    
+    // Sort planets by weight descending (including sun)
+    const sunAndPlanets = nodes.filter(n => n.type === 'sun' || n.type === 'planet');
+    const sortedPlanets = sunAndPlanets.sort((a, b) => b.weight - a.weight);
+    
+    for (let i = 0; i < sortedPlanets.length; i++) {
+        const node = sortedPlanets[i];
+        const nextNode = sortedPlanets[i + 1];
+        
+        if (nextNode && nextNode.weight > 0) {
+            node.sizeRatio = node.weight / nextNode.weight;
+            const nextSymbol = ('symbol' in nextNode.data ? nextNode.data.symbol : null)
+                || ('name' in nextNode.data ? nextNode.data.name : null)
+                || nextNode.id.toUpperCase();
+            node.nextEntitySymbol = nextSymbol;
+        } else {
+            node.sizeRatio = undefined;
+            node.nextEntitySymbol = undefined;
+        }
+    }
+    
+    // Compute sunMultiplier for all non-sun nodes (how many x to reach sun's market cap)
+    const sunWeight = sunNode.weight;
+    for (const node of nodes) {
+        if (node.type !== 'sun' && node.weight > 0) {
+            node.sunMultiplier = sunWeight / node.weight;
+        }
+    }
+    
+    // Group moons by parent chain
+    const moonsByChain: Record<string, GalaxyNode[]> = {};
+    for (const moon of nodes.filter(n => n.type === 'moon')) {
+        const chainId = moon.parentId || 'unknown';
+        if (!moonsByChain[chainId]) moonsByChain[chainId] = [];
+        moonsByChain[chainId].push(moon);
+    }
+    
+    // For each chain, sort moons by weight and compute ratios
+    for (const chainId of Object.keys(moonsByChain)) {
+        const chainMoons = moonsByChain[chainId].sort((a, b) => b.weight - a.weight);
+        
+        for (let i = 0; i < chainMoons.length; i++) {
+            const moon = chainMoons[i];
+            const nextMoon = chainMoons[i + 1];
+            
+            if (nextMoon && nextMoon.weight > 0) {
+                moon.sizeRatio = moon.weight / nextMoon.weight;
+                const nextSymbol = ('symbol' in nextMoon.data ? nextMoon.data.symbol : null)
+                    || ('name' in nextMoon.data ? nextMoon.data.name : null)
+                    || nextMoon.id.toUpperCase();
+                moon.nextEntitySymbol = nextSymbol;
+            } else {
+                // Last/smallest moon on this chain
+                moon.sizeRatio = undefined;
+                moon.nextEntitySymbol = undefined;
+            }
+        }
+    }
+
     return {
         nodes,
         sunNode,

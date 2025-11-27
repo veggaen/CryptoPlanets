@@ -10,6 +10,7 @@ import {
 import { loadGalaxyData } from "@/services/dataLoader";
 import { initGalaxyState, tickGalaxy } from "@/physics/galaxyEngine";
 import { CAMERA_CONFIG, updateFollowCamera, calculateIdealZoom, createCinematicTransition, updateCinematicTransition, CameraTransition } from "@/physics/cameraEngine";
+import { uiConfig } from "@/config/uiConfig";
 import Starfield from "./Starfield";
 import Footer from "./Footer";
 import GalaxyHUD from "./GalaxyHUD";
@@ -24,7 +25,12 @@ import RadialMenu from "./RadialMenu";
 // ============================================================================
 
 // --- Planet/Sun Component ---
-const PlanetNode = ({ node }: { node: GalaxyNode }) => {
+const PlanetNode = ({ 
+  node
+}: { 
+  node: GalaxyNode; 
+}) => {
+  const [isRatioHovered, setIsRatioHovered] = useState(false);
   const isSun = node.type === 'sun';
   const size = node.radius * 2;
   const glowIntensity = node.collisionGlow || 0;
@@ -48,8 +54,32 @@ const PlanetNode = ({ node }: { node: GalaxyNode }) => {
         : `$${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
     : null;
 
+  // Size ratio display - hover to toggle between "x > next" and "x to BTC"
+  const formatMultiplier = (mult: number) => {
+    if (mult >= 1000000) return `${(mult / 1000000).toFixed(1)}M`;
+    if (mult >= 1000) return `${(mult / 1000).toFixed(1)}K`;
+    return mult.toFixed(1);
+  };
+  
+  // Check if this node CAN show the alternate "x to BTC" view (not sun, has sunMultiplier)
+  const hasAlternateView = !isSun && !!node.sunMultiplier && node.sunMultiplier > 1;
+  
+  // Determine which view to show based on hover state
+  const showSunMultiplier = isRatioHovered && hasAlternateView;
+  
+  let sizeRatioDisplay: string | null = null;
+  
+  if (showSunMultiplier) {
+    // Show "Xx to BTC" mode on hover
+    sizeRatioDisplay = `${formatMultiplier(node.sunMultiplier!)}x → BTC`;
+  } else if (node.sizeRatio && node.nextEntitySymbol && node.sizeRatio > 1.01) {
+    // Show default "x > next" mode
+    sizeRatioDisplay = `${node.sizeRatio.toFixed(2)}x > ${node.nextEntitySymbol}`;
+  }
+
   const fontSize = Math.max(160, Math.round(node.radius * 0.28));
   const priceFontSize = Math.max(96, Math.round(node.radius * 0.16));
+  const ratioFontSize = Math.max(72, Math.round(node.radius * 0.12));
   const iconSize = Math.round(node.radius * 1.2); // Icon is 60% of diameter (120% of radius)
 
   return (
@@ -127,7 +157,7 @@ const PlanetNode = ({ node }: { node: GalaxyNode }) => {
           style={{
             fontSize,
             fontWeight: 800,
-            color: 'white',
+            color: uiConfig.planetTickerColor,
             textShadow: '3px 3px 0 #000, -3px -3px 0 #000, 3px -3px 0 #000, -3px 3px 0 #000',
             fontFamily: 'system-ui, -apple-system, sans-serif',
             letterSpacing: '-0.02em',
@@ -143,7 +173,7 @@ const PlanetNode = ({ node }: { node: GalaxyNode }) => {
             style={{
               fontSize: priceFontSize,
               fontWeight: 700,
-              color: '#22c55e',
+              color: uiConfig.planetPriceColor,
               textShadow: '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000',
               fontFamily: 'system-ui, -apple-system, sans-serif',
               marginTop: 8,
@@ -155,13 +185,42 @@ const PlanetNode = ({ node }: { node: GalaxyNode }) => {
             {priceDisplay}
           </span>
         )}
+        {/* Size ratio display - hover to toggle view */}
+        {sizeRatioDisplay && (
+          <span
+            onMouseEnter={hasAlternateView ? () => setIsRatioHovered(true) : undefined}
+            onMouseLeave={hasAlternateView ? () => setIsRatioHovered(false) : undefined}
+            style={{
+              fontSize: ratioFontSize,
+              fontWeight: 700,
+              color: showSunMultiplier ? '#f59e0b' : uiConfig.planetSizeRatioColor,
+              textShadow: '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000',
+              fontFamily: 'system-ui, -apple-system, sans-serif',
+              marginTop: 8,
+              lineHeight: 1,
+              zIndex: 100,
+              position: 'relative',
+              opacity: 0.9,
+              cursor: hasAlternateView ? 'pointer' : 'default',
+              transition: 'color 0.2s ease',
+              pointerEvents: 'auto',
+            }}
+          >
+            {sizeRatioDisplay}
+          </span>
+        )}
       </div>
     </div>
   );
 };
 
 // --- Moon Component ---
-const MoonNode = ({ node }: { node: GalaxyNode }) => {
+const MoonNode = ({ 
+  node
+}: { 
+  node: GalaxyNode;
+}) => {
+  const [isRatioHovered, setIsRatioHovered] = useState(false);
   const size = node.radius * 2; // diameter
   const ticker = 'symbol' in node.data ? node.data.symbol : '';
   const price = ('price' in node.data && typeof node.data.price === 'number') ? node.data.price : null;
@@ -175,6 +234,13 @@ const MoonNode = ({ node }: { node: GalaxyNode }) => {
     if (p >= 0.0001) return `$${p.toFixed(6)}`;
     return `$${p.toPrecision(3)}`;
   };
+  
+  // Format large multipliers (K, M)
+  const formatMultiplier = (mult: number) => {
+    if (mult >= 1000000) return `${(mult / 1000000).toFixed(1)}M`;
+    if (mult >= 1000) return `${(mult / 1000).toFixed(1)}K`;
+    return mult.toFixed(1);
+  };
 
   // Improved font sizing: scale proportionally with moon size
   // Larger moons should have larger, more readable text
@@ -186,12 +252,30 @@ const MoonNode = ({ node }: { node: GalaxyNode }) => {
   const baseFontSize = size * 0.28 * lengthFactor;
   const fontSize = Math.max(12, Math.min(48, Math.round(baseFontSize)));
   const priceFontSize = Math.max(10, Math.min(36, Math.round(fontSize * 0.75)));
+  const ratioFontSize = Math.max(8, Math.min(28, Math.round(fontSize * 0.55)));
   
   // Icon scales with moon size - 65% of diameter for good visibility
   const iconSize = Math.max(20, Math.round(size * 0.65));
   
   // Only show price on larger moons where it's readable
   const showPrice = size > 35 && fontSize >= 12;
+  
+  // Size ratio display - hover to toggle between "x > next" and "x to BTC"
+  // Check if this node CAN show the alternate "x to BTC" view
+  const hasAlternateView = !!node.sunMultiplier && node.sunMultiplier > 1;
+  
+  // Determine which view to show based on hover state
+  const showSunMultiplier = isRatioHovered && hasAlternateView;
+  
+  let sizeRatioDisplay: string | null = null;
+  
+  if (showSunMultiplier) {
+    // Show "Xx to BTC" mode on hover
+    sizeRatioDisplay = `${formatMultiplier(node.sunMultiplier!)}x → BTC`;
+  } else if (node.sizeRatio && node.nextEntitySymbol && node.sizeRatio > 1.01) {
+    // Show default "x > next" mode
+    sizeRatioDisplay = `${node.sizeRatio.toFixed(2)}x > ${node.nextEntitySymbol}`;
+  }
 
   return (
     <div
@@ -246,7 +330,7 @@ const MoonNode = ({ node }: { node: GalaxyNode }) => {
               style={{
                 fontSize,
                 fontWeight: 800,
-                color: 'white',
+                color: uiConfig.planetTickerColor,
                 textShadow: '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000',
                 lineHeight: 1.1,
                 fontFamily: 'system-ui, -apple-system, sans-serif',
@@ -262,7 +346,7 @@ const MoonNode = ({ node }: { node: GalaxyNode }) => {
                 style={{
                   fontSize: priceFontSize,
                   fontWeight: 700,
-                  color: '#22c55e',
+                  color: uiConfig.planetPriceColor,
                   textShadow: '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000',
                   lineHeight: 1.1,
                   fontFamily: 'system-ui, -apple-system, sans-serif',
@@ -271,6 +355,29 @@ const MoonNode = ({ node }: { node: GalaxyNode }) => {
                 }}
               >
                 {formatPrice(price)}
+              </span>
+            )}
+            {showPrice && sizeRatioDisplay && (
+              <span
+                onMouseEnter={hasAlternateView ? () => setIsRatioHovered(true) : undefined}
+                onMouseLeave={hasAlternateView ? () => setIsRatioHovered(false) : undefined}
+                style={{
+                  fontSize: ratioFontSize,
+                  fontWeight: 600,
+                  color: showSunMultiplier ? '#f59e0b' : uiConfig.planetSizeRatioColor,
+                  textShadow: '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000',
+                  lineHeight: 1,
+                  fontFamily: 'system-ui, -apple-system, sans-serif',
+                  zIndex: 100,
+                  position: 'relative',
+                  marginTop: 2,
+                  opacity: 0.9,
+                  cursor: hasAlternateView ? 'pointer' : 'default',
+                  transition: 'color 0.2s ease',
+                  pointerEvents: 'auto',
+                }}
+              >
+                {sizeRatioDisplay}
               </span>
             )}
           </>
@@ -601,13 +708,7 @@ export default function CryptoPlanets() {
 
     // Convert screen coords to world coords
     // The transform is: translate(camera.x, camera.y) scale(camera.zoom) with origin at center
-    // 
-    // To go from screen to world:
-    // 1. Get position relative to container center (where transform origin is)
-    // 2. Subtract camera translation (in screen pixels)
-    // 3. Divide by zoom to get world coordinates
-    //
-    // Note: World (0,0) corresponds to screen center when camera is at (0,0)
+    // World (0,0) is at the center of the viewport (where the sun lives)
     
     const centerX = rect.width / 2;
     const centerY = rect.height / 2;
@@ -616,29 +717,8 @@ export default function CryptoPlanets() {
     const worldX = (screenX - camera.x) / camera.zoom;
     const worldY = (screenY - camera.y) / camera.zoom;
 
-    // Debug: log what we're computing
-    console.log('=== Right-click debug ===');
-    console.log('Screen click:', { clientX: e.clientX, clientY: e.clientY });
-    console.log('Container rect:', { left: rect.left, top: rect.top, width: rect.width, height: rect.height });
-    console.log('Center:', { x: centerX, y: centerY });
-    console.log('Screen relative to center:', { x: screenX, y: screenY });
-    console.log('Camera:', { x: camera.x, y: camera.y, zoom: camera.zoom });
-    console.log('World coords:', { x: worldX, y: worldY });
-    console.log('Sun:', { 
-      x: galaxyStateRef.current.sunNode.x, 
-      y: galaxyStateRef.current.sunNode.y, 
-      r: galaxyStateRef.current.sunNode.radius 
-    });
-    if (galaxyStateRef.current.planetNodes.length > 0) {
-      const p = galaxyStateRef.current.planetNodes[0];
-      console.log('First planet:', { id: p.id, x: p.x, y: p.y, r: p.radius, orbitR: p.orbitRadius });
-      // Also compute where this planet SHOULD appear on screen
-      const planetScreenX = p.x * camera.zoom + camera.x;
-      const planetScreenY = p.y * camera.zoom + camera.y;
-      console.log('First planet screen position (relative to center):', { x: planetScreenX, y: planetScreenY });
-    }
-
     // Check nodes in order: moons first (smallest), then planets, then sun
+    // This ensures smaller overlapping objects get priority
     const allNodes = [
       ...galaxyStateRef.current.moonNodes,
       ...galaxyStateRef.current.planetNodes,
@@ -646,15 +726,15 @@ export default function CryptoPlanets() {
     ];
     
     // Minimum hit tolerance for very small objects (in world units)
-    const minHitRadius = 10 / camera.zoom;
+    const minHitRadius = 15 / camera.zoom;
     
     for (const node of allNodes) {
       const dx = worldX - node.x;
       const dy = worldY - node.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
       
-      // Use larger of node radius or minimum hit radius
-      const hitRadius = Math.max(node.radius, minHitRadius);
+      // Use larger of node radius or minimum hit radius for easier clicking
+      const hitRadius = Math.max(node.radius * 1.2, minHitRadius);
       
       if (dist < hitRadius) {
         const symbol = ('symbol' in node.data ? node.data.symbol : null)
@@ -751,29 +831,49 @@ export default function CryptoPlanets() {
 
       {/* Galaxy container */}
       <div
-        className="absolute inset-0 flex items-center justify-center pointer-events-none"
+        className="absolute inset-0 pointer-events-none"
         style={{
           transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`,
           transformOrigin: 'center center',
         }}
       >
-        {/* Orbit rings */}
-        {galaxyState.planetNodes.map(node => (
-          <OrbitRing key={`ring-${node.id}`} radius={node.orbitRadius} />
-        ))}
+        {/* Center origin wrapper - makes (0,0) the center of the viewport */}
+        <div 
+          style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            width: 0,
+            height: 0,
+          }}
+        >
+          {/* Orbit rings */}
+          {galaxyState.planetNodes.map(node => (
+            <OrbitRing key={`ring-${node.id}`} radius={node.orbitRadius} />
+          ))}
 
-        {/* Sun */}
-        <PlanetNode key={galaxyState.sunNode.id} node={galaxyState.sunNode} />
+          {/* Sun */}
+          <PlanetNode 
+            key={galaxyState.sunNode.id} 
+            node={galaxyState.sunNode}
+          />
 
-        {/* Planets */}
-        {galaxyState.planetNodes.map(node => (
-          <PlanetNode key={node.id} node={node} />
-        ))}
+          {/* Planets */}
+          {galaxyState.planetNodes.map(node => (
+            <PlanetNode 
+              key={node.id} 
+              node={node}
+            />
+          ))}
 
-        {/* Moons */}
-        {galaxyState.moonNodes.map(node => (
-          <MoonNode key={node.id} node={node} />
-        ))}
+          {/* Moons */}
+          {galaxyState.moonNodes.map(node => (
+            <MoonNode 
+              key={node.id} 
+              node={node}
+            />
+          ))}
+        </div>
       </div>
 
       {/* Galaxy HUD - Chain Navigation */}

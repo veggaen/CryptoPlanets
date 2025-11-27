@@ -80,6 +80,11 @@ export type GalaxyNode = {
     // Physics Properties
     weight: number;                // Used for calculations (TVL, market cap, etc.)
     mass: number;                  // For gravity calculations
+    
+    // Size comparison
+    sizeRatio?: number;            // How many times larger than next entity (e.g., 4.98 means "4.98x larger")
+    nextEntitySymbol?: string;     // Symbol of the next smaller entity for comparison
+    sunMultiplier?: number;        // How many times this entity needs to grow to reach the sun's weight
 
     // Data Reference
     data: BTCData | ChainData | TokenData; // Original data
