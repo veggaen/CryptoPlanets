@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback, memo } from "react";
+import { useEffect, useRef, useState, useCallback, memo, useMemo } from "react";
 import {
   GalaxyState,
   GalaxyNode,
@@ -8,8 +8,11 @@ import {
 } from "@/types/galaxy";
 import { loadGalaxyData } from "@/services/dataLoader";
 import { initGalaxyState, tickGalaxy } from "@/physics/galaxyEngine";
+import { CAMERA_CONFIG, updateFollowCamera, calculateIdealZoom } from "@/physics/cameraEngine";
 import Starfield from "./Starfield";
 import Footer from "./Footer";
+import GalaxyHUD from "./GalaxyHUD";
+import RadialMenu from "./RadialMenu";
 
 // ============================================================================
 // PERFORMANCE OPTIMIZATIONS (agar.io inspired):
@@ -302,9 +305,34 @@ export default function CryptoPlanets() {
 
   const [galaxyState, setGalaxyState] = useState<GalaxyState | null>(null);
   const [weightMode, setWeightMode] = useState<WeightMode>("MarketCap");
-  const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 0.6 });
-  const [minZoom, setMinZoom] = useState(0.1);
+  const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 0.05 });
   const [isLoading, setIsLoading] = useState(true);
+  
+  // Camera follow state
+  const [followingId, setFollowingId] = useState<string | null>(null);
+  const [targetZoom, setTargetZoom] = useState<number>(0.05);
+  
+  // Radial menu state
+  const [radialMenu, setRadialMenu] = useState<{
+    isOpen: boolean;
+    x: number;
+    y: number;
+    nodeId: string | null;
+    nodeSymbol: string;
+  }>({ isOpen: false, x: 0, y: 0, nodeId: null, nodeSymbol: '' });
+  
+  // Compute the display name for the currently followed node
+  const followingInfo = useMemo(() => {
+    if (!followingId || !galaxyState) return null;
+    const node = galaxyState.nodes.find(n => n.id === followingId);
+    if (!node) return null;
+    
+    const symbol = ('symbol' in node.data ? node.data.symbol : null)
+      || ('name' in node.data ? node.data.name : null)
+      || followingId.toUpperCase();
+    
+    return { symbol, type: node.type };
+  }, [followingId, galaxyState]);
   
   const requestRef = useRef<number>(0);
   const previousTimeRef = useRef<number>(0);
@@ -318,14 +346,9 @@ export default function CryptoPlanets() {
         const data = await loadGalaxyData(weightMode);
         const initialState = initGalaxyState(data);
 
-        const maxOrbit = Math.max(...initialState.nodes.map(n => n.orbitRadius)) + 100;
-        // Calculate zoom that fits entire galaxy, but clamp to reasonable range
-        const fitZoom = Math.min(window.innerWidth, window.innerHeight) / (maxOrbit * 2.2);
-        // Min zoom should allow seeing entire galaxy, but never less than 0.05 or more than 0.5
-        const clampedMinZoom = Math.max(0.05, Math.min(0.5, fitZoom));
-        setMinZoom(clampedMinZoom);
-        // Initial zoom: comfortable viewing, not too zoomed in or out
-        setCamera(prev => ({ ...prev, zoom: Math.max(clampedMinZoom, Math.min(0.8, fitZoom * 1.5)) }));
+        // Start zoomed out to see entire galaxy
+        setCamera({ x: 0, y: 0, zoom: 0.03 });
+        setTargetZoom(0.03);
 
         galaxyStateRef.current = initialState;
         setGalaxyState(initialState);
@@ -338,7 +361,7 @@ export default function CryptoPlanets() {
     init();
   }, [weightMode]);
 
-  // Animation loop
+  // Animation loop with camera follow
   useEffect(() => {
     const animate = (time: number) => {
       if (previousTimeRef.current !== undefined && galaxyStateRef.current) {
@@ -347,6 +370,28 @@ export default function CryptoPlanets() {
 
         // Update physics
         tickGalaxy(galaxyStateRef.current, dt);
+        
+        // Update camera if following a node
+        if (followingId && galaxyStateRef.current) {
+          const targetNode = galaxyStateRef.current.nodes.find(n => n.id === followingId);
+          if (targetNode) {
+            setCamera(prev => {
+              const updated = updateFollowCamera(
+                prev,
+                targetNode.x,
+                targetNode.y,
+                prev.zoom,
+                CAMERA_CONFIG.followLerpSpeed
+              );
+              
+              // Also smoothly interpolate zoom to target
+              const zoomDiff = targetZoom - prev.zoom;
+              const newZoom = prev.zoom + zoomDiff * CAMERA_CONFIG.zoomLerpSpeed;
+              
+              return { ...updated, zoom: newZoom };
+            });
+          }
+        }
         
         // Trigger re-render with new state reference
         setGalaxyState({ ...galaxyStateRef.current });
@@ -357,39 +402,71 @@ export default function CryptoPlanets() {
 
     requestRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(requestRef.current);
+  }, [followingId, targetZoom]);
+
+  // Handle follow planet - from HUD or radial menu
+  const handleFollowPlanet = useCallback((nodeId: string | null) => {
+    if (nodeId === null) {
+      // Release camera
+      setFollowingId(null);
+      return;
+    }
+
+    const node = galaxyStateRef.current?.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+
+    setFollowingId(nodeId);
+    
+    // Calculate ideal zoom for this node
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const idealZoom = calculateIdealZoom(node.radius, node.type as 'sun' | 'planet' | 'moon', viewportWidth, viewportHeight);
+    setTargetZoom(idealZoom);
   }, []);
 
-  // Camera handlers - SMOOTH proportional zoom
-  // Use native event listener to set passive:false (React synthetic events are passive)
+  // Camera wheel zoom - works even when following
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
-      // Proportional zoom: multiply by factor for smooth feel
-      const zoomFactor = e.deltaY > 0 ? 0.92 : 1.08; // 8% per scroll step
-      setCamera(prev => ({
-        ...prev,
-        zoom: Math.max(minZoom, Math.min(10, prev.zoom * zoomFactor))
-      }));
+      const zoomFactor = e.deltaY > 0 ? 0.92 : 1.08;
+      
+      setCamera(prev => {
+        const newZoom = Math.max(CAMERA_CONFIG.minZoom, Math.min(CAMERA_CONFIG.maxZoom, prev.zoom * zoomFactor));
+        return { ...prev, zoom: newZoom };
+      });
+      
+      // Also update target zoom if following
+      if (followingId) {
+        setTargetZoom(prev => Math.max(CAMERA_CONFIG.minZoom, Math.min(CAMERA_CONFIG.maxZoom, prev * zoomFactor)));
+      }
     };
 
-    // Add event listener with passive:false to allow preventDefault
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
-  }, [minZoom]);
+  }, [followingId]);
 
+  // Drag handling
   const [isDragging, setIsDragging] = useState(false);
   const lastMousePos = useRef({ x: 0, y: 0 });
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
-    setIsDragging(true);
-    lastMousePos.current = { x: e.clientX, y: e.clientY };
+    if (e.button === 0) { // Left click only
+      setIsDragging(true);
+      lastMousePos.current = { x: e.clientX, y: e.clientY };
+    }
   }, []);
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isDragging) return;
+    
+    // If dragging while following, release follow mode
+    if (followingId) {
+      setFollowingId(null);
+    }
+    
     const dx = e.clientX - lastMousePos.current.x;
     const dy = e.clientY - lastMousePos.current.y;
 
@@ -400,9 +477,130 @@ export default function CryptoPlanets() {
     }));
 
     lastMousePos.current = { x: e.clientX, y: e.clientY };
-  }, [isDragging]);
+  }, [isDragging, followingId]);
 
   const handleMouseUp = useCallback(() => setIsDragging(false), []);
+
+  // Right-click context menu for sun, planets, and moons
+  const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    
+    if (!galaxyStateRef.current) return;
+
+    // Find if we clicked on a planet, moon, or sun
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    // Convert screen coords to world coords
+    // Container is centered, so subtract half width/height to get container-relative coords
+    // Then subtract camera offset (in screen pixels) and divide by zoom
+    const containerX = e.clientX - rect.left - rect.width / 2;
+    const containerY = e.clientY - rect.top - rect.height / 2;
+    const worldX = (containerX - camera.x) / camera.zoom;
+    const worldY = (containerY - camera.y) / camera.zoom;
+
+    // Debug logging
+    console.log('Right-click debug:', {
+      click: { clientX: e.clientX, clientY: e.clientY },
+      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+      container: { x: containerX, y: containerY },
+      camera: { x: camera.x, y: camera.y, zoom: camera.zoom },
+      world: { x: worldX, y: worldY },
+      sunPos: { x: galaxyStateRef.current.sunNode.x, y: galaxyStateRef.current.sunNode.y, r: galaxyStateRef.current.sunNode.radius },
+      planets: galaxyStateRef.current.planetNodes.map(p => ({ id: p.id, x: p.x, y: p.y, r: p.radius })),
+    });
+
+    // Check nodes in order: moons first (smallest), then planets, then sun
+    // This ensures smaller objects get priority over larger ones
+    const allNodes = [
+      ...galaxyStateRef.current.moonNodes,
+      ...galaxyStateRef.current.planetNodes,
+      galaxyStateRef.current.sunNode,
+    ];
+    
+    // Minimum hit tolerance for very small objects (in world units)
+    const minHitRadius = 10 / camera.zoom;
+    
+    for (const node of allNodes) {
+      const dx = worldX - node.x;
+      const dy = worldY - node.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      
+      // Use larger of node radius or minimum hit radius
+      const hitRadius = Math.max(node.radius, minHitRadius);
+      
+      if (dist < hitRadius) {
+        const symbol = ('symbol' in node.data ? node.data.symbol : null)
+          || ('name' in node.data ? node.data.name : null)
+          || node.id.toUpperCase();
+        
+        setRadialMenu({
+          isOpen: true,
+          x: e.clientX,
+          y: e.clientY,
+          nodeId: node.id,
+          nodeSymbol: symbol,
+        });
+        return;
+      }
+    }
+    
+    // Clicked on empty space - close menu if open
+    setRadialMenu(prev => ({ ...prev, isOpen: false }));
+  }, [camera]);
+
+  // Radial menu items
+  const getRadialMenuItems = useCallback(() => {
+    const isFollowing = followingId === radialMenu.nodeId;
+    
+    return [
+      {
+        id: 'follow',
+        label: isFollowing ? 'Following' : 'Follow',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M12 2v4m0 12v4M2 12h4m12 0h4" />
+          </svg>
+        ),
+        onClick: () => handleFollowPlanet(radialMenu.nodeId),
+        color: isFollowing ? 'text-cyan-400' : undefined,
+      },
+      {
+        id: 'unfollow',
+        label: 'Release',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        ),
+        onClick: () => handleFollowPlanet(null),
+        color: 'text-red-400',
+      },
+      {
+        id: 'info',
+        label: 'Details',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="10" />
+            <path d="M12 16v-4m0-4h.01" />
+          </svg>
+        ),
+        onClick: () => console.log('View details:', radialMenu.nodeId),
+      },
+      {
+        id: 'isolate',
+        label: 'Isolate',
+        icon: (
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2m0 16v2M2 12h2m16 0h2" />
+          </svg>
+        ),
+        onClick: () => console.log('Isolate:', radialMenu.nodeId),
+      },
+    ];
+  }, [followingId, radialMenu.nodeId, handleFollowPlanet]);
 
   if (isLoading || !galaxyState) {
     return (
@@ -420,6 +618,7 @@ export default function CryptoPlanets() {
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onMouseLeave={handleMouseUp}
+      onContextMenu={handleContextMenu}
     >
       <Starfield />
 
@@ -450,13 +649,49 @@ export default function CryptoPlanets() {
         ))}
       </div>
 
+      {/* Galaxy HUD - Chain Navigation */}
+      <GalaxyHUD
+        planets={galaxyState.planetNodes}
+        sun={galaxyState.sunNode}
+        followingId={followingId}
+        onFollowPlanet={handleFollowPlanet}
+        zoom={camera.zoom}
+      />
+
+      {/* Radial Context Menu */}
+      <RadialMenu
+        isOpen={radialMenu.isOpen}
+        x={radialMenu.x}
+        y={radialMenu.y}
+        items={getRadialMenuItems()}
+        onClose={() => setRadialMenu(prev => ({ ...prev, isOpen: false }))}
+        title={radialMenu.nodeSymbol}
+      />
+
       {/* UI Overlay */}
-      <div className="absolute top-0 left-0 w-full h-full pointer-events-none p-6 flex flex-col justify-between z-50">
+      <div className="absolute top-0 left-0 w-full h-full pointer-events-none p-6 flex flex-col justify-between z-40">
         <div className="flex items-start justify-between">
-          <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10">
+          <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 ml-48">
             <h1 className="text-2xl font-bold text-white mb-2">Crypto Galaxy</h1>
             <p className="text-sm text-white/60">Real-time blockchain visualization</p>
           </div>
+
+          {/* Prominent Following Indicator - Center Top */}
+          {followingInfo && (
+            <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-cyan-500/20 backdrop-blur-md rounded-full px-6 py-2 border border-cyan-400/50 flex items-center gap-3">
+              <span className="w-3 h-3 rounded-full bg-cyan-400 animate-pulse" />
+              <span className="text-cyan-300 font-semibold text-sm">
+                Following: {followingInfo.symbol}
+              </span>
+              <button
+                onClick={() => handleFollowPlanet(null)}
+                className="pointer-events-auto text-cyan-400/60 hover:text-red-400 transition-colors ml-2 text-xs"
+                title="Release follow"
+              >
+                ✕
+              </button>
+            </div>
+          )}
 
           <select
             className="pointer-events-auto bg-black/50 backdrop-blur-md border border-white/10 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-black/70 transition-colors"
@@ -467,17 +702,29 @@ export default function CryptoPlanets() {
             <option value="MarketCap">Size by Market Cap</option>
             <option value="Volume24h">Size by 24h Volume</option>
             <option value="Change24h">Size by 24h Change</option>
-            <option value="Change24h">Size by 4h Change</option>
-            <option value="Change24h">Size by 1h Change</option>
           </select>
         </div>
 
-        <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 max-w-xs">
+        <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 max-w-xs ml-48">
           <div className="text-xs text-white/60 mb-2">Camera Controls</div>
-          <div className="text-xs text-white/80">
-            <div>🖱️ Drag to pan</div>
+          <div className="text-xs text-white/80 space-y-1">
+            <div>🖱️ Drag to pan {followingId && <span className="text-yellow-400">(releases lock)</span>}</div>
             <div>🔍 Scroll to zoom</div>
-            <div>Zoom: {(camera.zoom * 100).toFixed(0)}%</div>
+            <div>👆 Click chain in HUD to follow</div>
+            <div>🖱️ Right-click any object for menu</div>
+          </div>
+          <div className="text-xs text-cyan-400 mt-2">
+            {followingInfo ? (
+              <span className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+                Following: {followingInfo.symbol} ({followingInfo.type})
+              </span>
+            ) : (
+              <span className="text-white/40">Free camera</span>
+            )}
+          </div>
+          <div className="text-xs text-white/40 mt-1">
+            Zoom: {(camera.zoom * 100).toFixed(1)}%
           </div>
         </div>
       </div>
