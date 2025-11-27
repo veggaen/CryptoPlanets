@@ -3,7 +3,7 @@
 
 export const dataConfig = {
     // ===== Weight Modes =====
-    defaultWeightMode: "TVL" as const,
+    defaultWeightMode: "MarketCap" as const,
     supportedWeightModes: [
         "TVL",           // Total Value Locked
         "MarketCap",     // Market Capitalization
@@ -12,6 +12,14 @@ export const dataConfig = {
         "Change7d",      // 7-day price change percentage
         "Change30d",     // 30-day price change percentage
     ] as const,
+
+    // ===== Priority Tokens (Moons) =====
+    // Specific top tokens to display for major chains
+    priorityTokens: {
+        ethereum: ["tether", "usd-coin", "uniswap", "chainlink", "shiba-inu", "wrapped-bitcoin", "pepe"],
+        solana: ["usd-coin", "jupiter-exchange-solana", "raydium", "bonk", "serum", "render-token"],
+        pulsechain: ["pulsex", "dai", "weth", "hex", "incentive", "shiba-inu", "pepe"], // Common bridged/native
+    } as Record<string, string[]>,
 
     // ===== Chain → CoinGecko Ecosystem Category Mapping =====
     // Maps internal chain IDs to CoinGecko's ecosystem categories

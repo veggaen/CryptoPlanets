@@ -10,14 +10,21 @@ export async function loadGalaxyData(weightMode: WeightMode): Promise<GalaxyData
     debugLog('data', `Loading galaxy data with weight mode: ${weightMode}`);
 
     try {
-        // Fetch all data in parallel
-        const [btcData, chains] = await Promise.all([
+        // 1. Fetch Core Data (Parallel)
+        const [btcData, chains, pulseChain] = await Promise.all([
             fetchBTCStats(),
             fetchChainsTVL(),
+            import('./pulseChain').then(m => m.getPulseChainData())
         ]);
 
-        // Sort chains by weight
-        const weightedChains = chains
+        // Add PulseChain to chains list if not present
+        const allChains = [...chains];
+        if (!allChains.find(c => c.id === 'pulsechain')) {
+            allChains.push(pulseChain);
+        }
+
+        // 2. Sort & Filter Chains
+        const weightedChains = allChains
             .map(chain => ({
                 ...chain,
                 weight: calculateWeight(chain, weightMode),
@@ -25,50 +32,60 @@ export async function loadGalaxyData(weightMode: WeightMode): Promise<GalaxyData
             .sort((a, b) => b.weight - a.weight)
             .slice(0, dataConfig.maxChains);
 
-        // Fetch native token prices for all chains
+        // 3. Fetch Prices (Batch)
         const geckoIds = weightedChains
             .map(c => c.geckoId)
             .filter((id): id is string => id !== undefined && id !== null);
 
-        debugLog('data', `Fetching prices for ${geckoIds.length} chain native tokens: ${geckoIds.join(', ')}`);
+        debugLog('data', `Fetching prices for ${geckoIds.length} chains`);
         const { fetchCoinsPrices } = await import('./coinGecko');
         const chainPrices = await fetchCoinsPrices(geckoIds);
 
-        // Populate prices in chains
-        weightedChains.forEach(chain => {
-            if (chain.geckoId && chainPrices[chain.geckoId]) {
-                chain.price = chainPrices[chain.geckoId];
-                debugLog('data', `Set price for ${chain.name}: $${chain.price}`);
-            }
-        });
+        // Update chain prices
+        const totalVal = btcData.marketCap + allChains.reduce((sum, c) => sum + c.tvl, 0);
 
-        // Fetch tokens for each chain using ecosystem-specific APIs
+        // 4. Fetch Tokens (Parallel per chain)
         const chainsWithTokens = await Promise.all(
             weightedChains.map(async (chain) => {
                 let tokens: any[] = [];
 
-                // Check if this chain has a CoinGecko ecosystem category mapping
-                const ecosystemCategory = dataConfig.chainEcosystemCategory[chain.id];
+                // Check for priority tokens first
+                const priorityList = dataConfig.priorityTokens[chain.id];
 
-                if (ecosystemCategory) {
-                    // Use CoinGecko for ecosystem tokens (REAL chain-specific tokens)
-                    debugLog('data', `Fetching ecosystem tokens for ${chain.id} from category: ${ecosystemCategory}`);
-                    const { fetchEcosystemTokensFromCoinGecko } = await import("./coinGecko");
-                    tokens = await fetchEcosystemTokensFromCoinGecko(ecosystemCategory, dataConfig.tokensPerChain);
-                } else {
-                    // Fallback to DexScreener for chains without ecosystem mapping
-                    debugLog('data', `Fetching tokens for ${chain.id} from DexScreener (no ecosystem category)`);
-                    tokens = await fetchTokensForChain(chain.id, dataConfig.tokensPerChain);
+                if (priorityList && priorityList.length > 0) {
+                    debugLog('data', `Fetching ${priorityList.length} priority tokens for ${chain.id}`);
+                    const { fetchSpecificTokens } = await import("./coinGecko");
+                    tokens = await fetchSpecificTokens(priorityList);
                 }
+
+                // If no priority tokens or they failed/returned few, fall back to ecosystem/dexscreener
+                if (tokens.length < dataConfig.tokensPerChain) {
+                    const ecosystemCategory = dataConfig.chainEcosystemCategory[chain.id];
+                    if (ecosystemCategory) {
+                        const { fetchEcosystemTokensFromCoinGecko } = await import("./coinGecko");
+                        const moreTokens = await fetchEcosystemTokensFromCoinGecko(ecosystemCategory, dataConfig.tokensPerChain);
+                        // Merge and deduplicate
+                        const existingIds = new Set(tokens.map(t => t.address)); // address here is geckoID
+                        moreTokens.forEach(t => {
+                            if (!existingIds.has(t.address)) {
+                                tokens.push(t);
+                            }
+                        });
+                    } else {
+                        // Fallback to DexScreener
+                        const dexTokens = await fetchTokensForChain(chain.id, dataConfig.tokensPerChain);
+                        tokens = [...tokens, ...dexTokens];
+                    }
+                }
+
+                // Slice to limit
+                tokens = tokens.slice(0, dataConfig.tokensPerChain);
 
                 return { ...chain, tokens };
             })
         );
 
-        // Calculate dominance for BTC and chains
-        // Total market cap = BTC cap + Sum of all chain TVLs (approximation for this viz)
-        const totalVal = btcData.marketCap + chains.reduce((sum, c) => sum + c.tvl, 0);
-
+        // 5. Calculate Dominance
         btcData.dominance = (btcData.marketCap / totalVal) * 100;
         chainsWithTokens.forEach(c => {
             c.dominance = (c.tvl / totalVal) * 100;
@@ -82,16 +99,13 @@ export async function loadGalaxyData(weightMode: WeightMode): Promise<GalaxyData
             metric: weightMode,
         };
 
-        // Runtime validation
         validateGalaxyData(galaxyData);
-
-        debugLog('data', `Loaded ${galaxyData.chains.length} chains with ${galaxyData.chains.reduce((sum, c) => sum + c.tokens.length, 0)} total tokens`);
+        debugLog('data', `Loaded ${galaxyData.chains.length} chains with real data`);
 
         return galaxyData;
 
     } catch (error) {
         console.error('[DATA ERROR]', error);
-        // Return fallback/mock data
         return getFallbackData();
     }
 }
@@ -99,11 +113,15 @@ export async function loadGalaxyData(weightMode: WeightMode): Promise<GalaxyData
 function calculateWeight(chain: ChainData, mode: WeightMode): number {
     switch (mode) {
         case 'TVL': return chain.tvl;
-        case 'MarketCap': return chain.tvl; // Using TVL as proxy for chain MC if MC is missing
+        // Use TVL as proxy for Chain Market Cap if not explicitly available (DefiLlama doesn't give Chain MC easily)
+        // But for ordering, TVL is often a good enough proxy for "DeFi Size". 
+        // If we had real Chain MC (e.g. ETH MC), we should use it.
+        // We do fetch 'price' for the chain. If we had circulating supply, we could calc MC.
+        // For now, let's stick to TVL for chains, but maybe boost it?
+        // Actually, let's use TVL as the primary weight for "Size" in the galaxy unless we have a better metric.
+        case 'MarketCap': return chain.tvl;
         case 'Volume24h': return chain.volume24h;
         case 'Change24h': return Math.abs(chain.change24h);
-        case 'Change7d': return 0; // Not implemented yet
-        case 'Change30d': return 0; // Not implemented yet
         default: return chain.tvl;
     }
 }

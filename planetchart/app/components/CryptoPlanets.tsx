@@ -71,6 +71,9 @@ const PlanetNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
           boxShadow: node.type === 'sun'
             ? `0 0 ${60 * zoom}px ${20 * zoom}px rgba(251, 191, 36, 0.4)`
             : `0 0 ${20 * zoom}px rgba(255,255,255,0.1)`,
+          willChange: 'transform',
+          backfaceVisibility: 'hidden',
+          WebkitFontSmoothing: 'antialiased',
         }}
       />
 
@@ -117,6 +120,9 @@ const MoonNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
         y: -node.radius,
         backgroundColor: node.color,
         zIndex: 30,
+        willChange: 'transform', // Optimize for animations
+        backfaceVisibility: 'hidden', // Prevent blur on some browsers
+        WebkitFontSmoothing: 'antialiased', // Sharp text
       }}
     >
       {/* Centered Text Labels - INSIDE the moon like planets */}
@@ -126,9 +132,10 @@ const MoonNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
           style={{
             left: '50%',
             top: '50%',
-            transform: 'translate(-50%, -50%)',
+            transform: 'translate(-50%, -50%) translateZ(0)', // Force GPU layer for sharpness
             width: '90%',
             height: '90%',
+            textRendering: 'optimizeLegibility',
           }}
         >
           <div className="text-white font-bold drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] antialiased text-center" style={{ fontSize: '7px' }}>
@@ -161,7 +168,7 @@ export default function CryptoPlanets() {
   const containerRef = useRef<HTMLDivElement>(null);
 
   const [galaxyState, setGalaxyState] = useState<GalaxyState | null>(null);
-  const [weightMode, setWeightMode] = useState<WeightMode>("TVL");
+  const [weightMode, setWeightMode] = useState<WeightMode>("MarketCap");
   const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 0.6 });
   const [minZoom, setMinZoom] = useState(0.1);
   const [isLoading, setIsLoading] = useState(true);

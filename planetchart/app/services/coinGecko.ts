@@ -319,3 +319,72 @@ export async function fetchCoinsPrices(coinIds: string[]): Promise<Record<string
         return {};
     }
 }
+
+/**
+ * Fetch specific tokens by their CoinGecko IDs
+ * Used for priority tokens (moons)
+ */
+export async function fetchSpecificTokens(tokenIds: string[]): Promise<TokenData[]> {
+    if (tokenIds.length === 0) return [];
+
+    const now = Date.now();
+
+    // Return mock data if flag is set
+    if (USE_MOCK_COINGECKO) {
+        debugLog('data', `Using MOCK specific tokens for: ${tokenIds.join(', ')}`);
+        return tokenIds.map((id, i) => ({
+            symbol: id.substring(0, 3).toUpperCase(),
+            name: id,
+            address: id,
+            price: Math.random() * 100,
+            change24h: (Math.random() * 40) - 20,
+            volume24h: Math.random() * 10000000,
+            liquidity: Math.random() * 5000000,
+            marketCap: Math.random() * 100000000,
+            color: getTokenColor((Math.random() * 40) - 20),
+        }));
+    }
+
+    try {
+        const ids = tokenIds.join(',');
+        const url = `${dataConfig.coinGecko.baseURL}${dataConfig.coinGecko.endpoints.markets}?vs_currency=usd&ids=${encodeURIComponent(ids)}&order=market_cap_desc&per_page=${tokenIds.length}&page=1&sparkline=false`;
+        debugLog('data', `Fetching specific tokens from: ${url}`);
+
+        // Add API key if available
+        const apiKey = process.env.COINGECKO_API_KEY || process.env.NEXT_PUBLIC_COINGECKO_API_KEY;
+        const headers: HeadersInit = apiKey ? { 'x-cg-demo-api-key': apiKey } : {};
+
+        const response = await fetch(url, { headers });
+
+        if (!response.ok) {
+            if (response.status === 429) {
+                debugLog('data', `CoinGecko rate limit hit (429) for specific tokens`);
+            } else {
+                debugLog('data', `CoinGecko API error for specific tokens: ${response.status} ${response.statusText}`);
+            }
+            return [];
+        }
+
+        const rawData: RawCoinGeckoEcosystemToken[] = await response.json();
+
+        // Map to our TokenData format
+        const tokens: TokenData[] = rawData.map(token => ({
+            symbol: token.symbol.toUpperCase(),
+            name: token.name,
+            address: token.id, // Use CoinGecko ID as address
+            price: token.current_price || 0,
+            change24h: token.price_change_percentage_24h || 0,
+            volume24h: token.total_volume || 0,
+            liquidity: 0,
+            marketCap: token.market_cap || 0,
+            color: getTokenColor(token.price_change_percentage_24h || 0),
+        }));
+
+        debugLog('data', `✅ Fetched ${tokens.length} specific priority tokens`);
+        return tokens;
+
+    } catch (error) {
+        debugLog('data', `Error fetching specific tokens: ${error}`);
+        return [];
+    }
+}
