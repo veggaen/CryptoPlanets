@@ -4,64 +4,69 @@
 
 export const physicsConfig = {
     // ===== Orbital Motion (Deterministic) =====
-    baseChainAngularVel: 0.0005,    // Base angular velocity for chain orbits (radians/frame)
-    baseTokenAngularVel: 0.002,     // Tokens orbit faster than planets
-    orbitSpeedFalloff: 0.15,        // How much orbit speed decreases with distance
+    baseChainAngularVel: 0.0003,    // Base angular velocity for chain orbits (radians/frame) - SLOWER for cosmic feel
+    baseTokenAngularVel: 0.0012,    // Tokens orbit faster than planets - REDUCED for stability
+    orbitSpeedFalloff: 0.2,         // How much orbit speed decreases with distance
 
     // ===== Gravity & Physics (N-Body Lite) =====
-    sunGravity: 0.1,                // Gravity constant for Sun pulling everything
-    planetGravity: 0.02,            // Gravity constant for Planets pulling Moons
-    moonGravity: 0.005,             // Gravity constant for Moons pulling Asteroids
-    friction: 0.99,                 // Velocity damping per tick (0.99 = 1% loss)
-    moonFriction: 0.92,             // HEAVY friction for moons to dampen bounce (was 0.95)
-    repulsion: 1.5,                 // Soft repulsion force strength (for collisions)
-    repulsionCrossChain: 0.5,       // Weaker repulsion for cross-chain/cross-parent interactions
-    damper: 0.9,                    // HIGH collision velocity damping for grinding effect (energy loss)
+    sunGravity: 0.015,              // REDUCED - gentle pull, not a vortex
+    planetGravity: 0.008,           // REDUCED - planets gently pull moons
+    moonGravity: 0.002,             // REDUCED - moons gently pull asteroids
+    friction: 0.96,                 // MORE friction for stability (4% loss per tick)
+    moonFriction: 0.88,             // HEAVY friction for moons (12% loss) - prevents bounce storms
+    repulsion: 8.0,                 // STRONG repulsion for 9x scale - prevent pass-through
+    repulsionCrossChain: 2.0,       // Cross-chain repulsion - visible but weaker
+    damper: 0.85,                   // Higher damping = more grinding, less bouncing
 
     // ===== Stability & Limits =====
-    orbitCorrectionStrength: 0.001,  // VERY LOW - let physics dominate to avoid sync bounce
-    maxVelocity: 15,                // Cap on maximum velocity to prevent explosions
+    orbitCorrectionStrength: 0.04,  // 80/20 BLEND: 4% correction per tick pulls back to orbit
+    maxVelocity: 4,                 // LOWER cap - prevent explosions, keep motion slow/cosmic
 
     // ===== Collision & Visuals =====
-    collidePadding: 2,              // Extra spacing for collision detection (px)
-    collisionGlowDecay: 0.9,        // How fast collision glow fades (per frame)
+    collidePadding: 40,             // Extra spacing for collision detection (px) - 9x scale
+    collisionGlowDecay: 0.92,       // How fast collision glow fades (per frame)
+
+    // ===== Bounds (Prevent Escape) ===== - 9x SCALE (MASSIVE SPACE)
+    galaxyBounds: 150000,           // Max distance from center (px) - HUGE space, no walls
+    boundsSoftness: 0.05,           // Very soft boundary push
 
     // ===== Object Limits =====
     maxChains: 10,                  // Maximum number of chains to display
     tokensPerChain: 20,             // Maximum tokens per chain
 
-    // ===== Size Ranges =====
-    minPlanetRadius: 30,            // Smallest planet size (px)
-    maxPlanetRadius: 120,           // Largest planet size (px)
-    minTokenRadius: 4,              // Smallest token/moon size (px)
-    maxTokenRadius: 15,             // Largest token/moon size (px)
-    asteroidBaseRadius: 2,          // Base radius for asteroids/meteorites
+    // ===== Size Ranges (SQRT SCALING) - 9x SCALE =====
+    // BTC sun radius 5400px => ETH (5x smaller cap) => radius = 5400/sqrt(5) = ~2415px
+    minPlanetRadius: 720,           // Smallest planet size (px) - 9x
+    maxPlanetRadius: 3150,          // Largest planet size (px) - 9x MASSIVE planets
+    minTokenRadius: 45,             // Smallest token/moon size (px) - 9x
+    maxTokenRadius: 360,            // Largest token/moon size (px) - 9x room for differentiation
+    asteroidBaseRadius: 27,         // Base radius for asteroids/meteorites - 9x
 
     // ===== BTC (Sun) Properties =====
-    sunRadius: 160,                 // Sun's visual radius (px)
+    sunRadius: 5400,                // Sun's visual radius (px) - 9x MASSIVE
     sunMass: 1000,                  // Mass for gravity calculations
-    sunGlowRadius: 50,              // Extra visual glow around sun (px)
+    sunGlowRadius: 1350,            // Extra visual glow around sun (px) - 9x
 
-    // ===== Orbit Radius Calculation =====
-    basePlanetOrbit: 500,           // Base orbit for first planet (px)
-    planetOrbitStep: 250,           // Additional radius per planet (px)
-    planetSafetyPadding: 80,        // Extra padding between planet systems (px)
+    // ===== Orbit Radius Calculation ===== - 9x SCALE
+    basePlanetOrbit: 10800,         // Base orbit for first planet (px) - 9x far from massive sun
+    planetOrbitStep: 6300,          // Additional radius per planet (px) - 9x
+    planetSafetyPadding: 1800,      // Extra padding between planet systems (px) - 9x
 
-    // ===== Token/Moon Orbit =====
-    baseMoonOrbitRadius: 60,        // Starting radius for moon belt from planet center (px)
+    // ===== Token/Moon Orbit ===== - 9x SCALE
+    baseMoonOrbitRadius: 1080,      // Starting radius for moon belt from planet edge (px) - 9x FAR from planet
 
     // ===== Moon Ring System =====
-    moonSlotsPerRing: 8,            // Number of moon slots per ring/belt
-    moonRingStep: 35,               // Distance between moon rings (px)
+    moonSlotsPerRing: 6,            // Fewer slots = more spacing between moons
+    moonRingStep: 540,              // Distance between moon rings (px) - 9x spread
 
     // ===== Moons vs Meteorites =====
-    maxMoonsPerPlanet: 12,          // Max liquid tokens (moons) per chain
-    maxMeteoritesPerPlanet: 30,     // Max illiquid tokens (meteorites) per chain
-    moonMinRadius: 8,               // Minimum moon radius (px)
-    moonMaxRadius: 24,              // Maximum moon radius (px)
-    meteoriteMinRadius: 1.5,        // Minimum meteorite radius (px)
-    meteoriteMaxRadius: 4,          // Maximum meteorite radius (px)
-    meteoriteOrbitRadius: 15,       // Orbit radius around parent moon (px)
+    maxMoonsPerPlanet: 8,           // Fewer moons = less clutter
+    maxMeteoritesPerPlanet: 8,      // Fewer meteorites
+    moonMinRadius: 72,              // Minimum moon radius (px) - 9x
+    moonMaxRadius: 450,             // Maximum moon radius (px) - 9x BIG moons
+    meteoriteMinRadius: 27,         // Minimum meteorite radius (px) - 9x
+    meteoriteMaxRadius: 72,         // Maximum meteorite radius (px) - 9x
+    meteoriteOrbitRadius: 270,      // Orbit radius around parent moon (px) - 9x
 
     // ===== Performance =====
     updateInterval: 16,             // Target ms per physics tick (60fps = 16.67ms)

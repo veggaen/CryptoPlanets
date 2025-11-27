@@ -15,7 +15,7 @@ import { debugLog } from "./debug";
 
 // ===== Token Data Schema =====
 export const tokenDataSchema = z.object({
-    symbol: z.string().min(1).max(10),
+    symbol: z.string().min(1).max(20), // Allow longer symbols (some tokens have longer names)
     name: z.string().min(1),
     address: z.string().min(1),
     price: z.number().nonnegative(),
@@ -24,6 +24,7 @@ export const tokenDataSchema = z.object({
     liquidity: z.number().nonnegative(),
     marketCap: z.number().nonnegative(),
     color: z.string(),
+    icon: z.string().optional(), // Token icon URL
 });
 
 // ===== Chain Data Schema =====
@@ -38,7 +39,9 @@ export const chainDataSchema = z.object({
     volume24h: z.number().nonnegative(),
     dominance: z.number().min(0).max(100),
     color: z.string(),
-    tokens: z.array(tokenDataSchema),
+    tokens: z.array(tokenDataSchema), // Allow empty array - chains can have 0 tokens
+    icon: z.string().optional(), // Chain icon URL
+    geckoId: z.string().optional(), // CoinGecko ID for price fetching
 });
 
 // ===== BTC Data Schema =====
@@ -48,6 +51,7 @@ export const btcDataSchema = z.object({
     dominance: z.number().min(0).max(100),
     marketCap: z.number().positive(),
     volume24h: z.number().nonnegative(),
+    icon: z.string().optional(), // BTC icon URL
 });
 
 // ===== Galaxy Data Schema =====
@@ -120,9 +124,10 @@ export function validateGalaxyData(data: unknown): asserts data is GalaxyData {
         debugLog('data', '✅ GalaxyData validation passed');
     } catch (error) {
         if (error instanceof ZodError) {
-            const zError = error as any;
-            console.error('[VALIDATION ERROR] GalaxyData failed validation:', zError.errors);
-            throw new Error(`GalaxyData validation failed: ${zError.errors.map((e: any) => e.message).join(', ')}`);
+            const issues = error.issues || [];
+            const errorMessages = issues.map((e: any) => `${e.path.join('.')}: ${e.message}`).join(', ');
+            console.error('[VALIDATION ERROR] GalaxyData failed validation:', errorMessages);
+            throw new Error(`GalaxyData validation failed: ${errorMessages || 'Unknown validation error'}`);
         }
         throw error;
     }

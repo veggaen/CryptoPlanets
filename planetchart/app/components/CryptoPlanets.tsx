@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { useEffect, useRef, useState, useMemo, useCallback, memo } from "react";
 import {
   GalaxyState,
   GalaxyNode,
@@ -10,160 +9,295 @@ import {
 import { loadGalaxyData } from "@/services/dataLoader";
 import { initGalaxyState, tickGalaxy } from "@/physics/galaxyEngine";
 import { physicsConfig } from "@/config/physicsConfig";
-import { uiConfig } from "@/config/uiConfig";
-import { visualConfig } from "@/config/visualConfig";
 import Starfield from "./Starfield";
 import Footer from "./Footer";
 
-// --- Components ---
+// ============================================================================
+// PERFORMANCE OPTIMIZATIONS (agar.io inspired):
+// 1. NO Framer Motion - direct CSS transforms only
+// 2. Minimal re-renders with proper memoization
+// 3. GPU-accelerated transforms with translate3d
+// 4. Simplified DOM structure
+// ============================================================================
 
-const PlanetNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
-  // Safe color parsing
-  const getGradientColors = (color: string) => {
-    const parts = color.split(' ');
-    if (parts.length >= 3) {
-      const from = parts[1]?.replace('from-', '') || 'blue-400';
-      const to = parts[2]?.replace('to-', '') || 'blue-600';
-      return { from, to };
-    }
-    return { from: 'blue-400', to: 'blue-600' };
-  };
+// --- Planet/Sun Component ---
+const PlanetNode = ({ node }: { node: GalaxyNode }) => {
+  const isSun = node.type === 'sun';
+  const size = node.radius * 2;
+  const glowIntensity = node.collisionGlow || 0;
 
-  const { from, to } = node.type === 'sun' ? { from: '#fbbf24', to: '#d97706' } : getGradientColors(node.color);
+  // Get symbol, price, and icon from data
+  const symbol = ('symbol' in node.data ? node.data.symbol : null) 
+    || ('name' in node.data ? node.data.name : null) 
+    || 'BTC';
+  
+  const price = ('price' in node.data && typeof node.data.price === 'number') 
+    ? node.data.price 
+    : null;
+
+  const icon = ('icon' in node.data && typeof node.data.icon === 'string')
+    ? node.data.icon
+    : null;
+
+  const priceDisplay = price !== null
+    ? (price < 1 
+        ? `$${price.toPrecision(4)}` 
+        : `$${price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`)
+    : null;
+
+  const fontSize = Math.max(160, Math.round(node.radius * 0.28));
+  const priceFontSize = Math.max(96, Math.round(node.radius * 0.16));
+  const iconSize = Math.round(node.radius * 1.2); // Icon is 60% of diameter (120% of radius)
 
   return (
     <div
-      className="absolute"
       style={{
+        position: 'absolute',
         left: node.x,
         top: node.y,
         transform: 'translate(-50%, -50%)',
-        zIndex: node.type === 'sun' ? 10 : 20,
+        zIndex: isSun ? 10 : 20,
       }}
     >
-      {/* Planet Halo - more visible, especially when zoomed out */}
-      {node.type !== 'sun' && (
+      {/* Corona for sun */}
+      {isSun && (
         <div
-          className="absolute rounded-full pointer-events-none"
           style={{
-            width: node.radius * 3.2,
-            height: node.radius * 3.2,
-            background: `radial-gradient(circle, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0.3) 50%, rgba(0,0,0,0) 80%)`,
+            position: 'absolute',
+            width: size * 3,
+            height: size * 3,
             left: '50%',
             top: '50%',
             transform: 'translate(-50%, -50%)',
+            borderRadius: '50%',
+            background: 'radial-gradient(circle, rgba(251, 191, 36, 0.2) 0%, rgba(217, 119, 6, 0.05) 50%, transparent 70%)',
+            pointerEvents: 'none',
           }}
         />
       )}
-
-      {/* Planet/Sun Body - always visible */}
-      <motion.div
-        className="absolute rounded-full flex items-center justify-center shadow-xl shadow-yellow-500/50 opacity-90 border border-yellow-300/50"
-        style={{
-          left: '50%',
-          top: '50%',
-          transform: 'translate(-50%, -50%)',
-          width: node.radius * 2,
-          height: node.radius * 2,
-          background: node.type === 'sun'
-            ? `radial-gradient(circle at 30% 30%, ${from}, ${to})`
-            : `linear-gradient(135deg, ${from}, ${to})`,
-          boxShadow: node.type === 'sun'
-            ? `0 0 ${60 * zoom}px ${20 * zoom}px rgba(251, 191, 36, 0.4)`
-            : `0 0 ${20 * zoom}px rgba(255,255,255,0.1)`,
-          willChange: 'transform',
-          backfaceVisibility: 'hidden',
-          WebkitFontSmoothing: 'antialiased',
-        }}
-      />
-
-      {/* Planet/Sun Labels - ALWAYS show for planets and sun */}
+      
+      {/* Main body */}
       <div
-        className="absolute pointer-events-none flex flex-col items-center justify-center"
         style={{
-          left: '50%',
-          top: '50%',
-          transform: `translate(-50%, -50%) scale(${1 / Math.max(0.5, zoom)})`,
+          position: 'relative',
+          width: size,
+          height: size,
+          borderRadius: '50%',
+          background: isSun
+            ? 'radial-gradient(circle at 30% 30%, #fbbf24, #d97706)'
+            : node.color.includes('gradient') 
+              ? node.color 
+              : `linear-gradient(135deg, ${node.color}, ${node.color}dd)`,
+          boxShadow: isSun
+            ? '0 0 60px 25px rgba(251, 191, 36, 0.5), inset 0 0 20px rgba(255,255,255,0.2)'
+            : glowIntensity > 0.05 
+              ? `0 0 20px rgba(255,255,255,${glowIntensity * 0.5})`
+              : '0 0 15px rgba(255,255,255,0.15)',
+          border: isSun ? '2px solid rgba(255,200,100,0.3)' : '1px solid rgba(255,255,255,0.2)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexDirection: 'column',
+          overflow: 'hidden',
         }}
       >
-        <div className="font-bold text-white whitespace-nowrap drop-shadow-lg" style={{ fontSize: node.type === 'sun' ? 24 : 16 }}>
-          {('symbol' in node.data ? node.data.symbol : null) || ('name' in node.data ? node.data.name : null) || "BTC"}
-        </div>
-        {/* ALWAYS show price for planets/sun */}
-        {'price' in node.data && typeof node.data.price === 'number' && (
-          <div className="text-xs text-white/90 drop-shadow mt-1">
-            ${node.data.price.toFixed(2)}
-          </div>
+        {/* Background icon - behind text, centered, 50% opacity */}
+        {icon && (
+          <img
+            src={icon}
+            alt=""
+            style={{
+              position: 'absolute',
+              width: iconSize,
+              height: iconSize,
+              left: '50%',
+              top: '50%',
+              transform: 'translate(-50%, -50%)',
+              opacity: 0.4,
+              zIndex: 0,
+              pointerEvents: 'none',
+              borderRadius: '50%',
+            }}
+          />
+        )}
+        <span
+          style={{
+            fontSize,
+            fontWeight: 800,
+            color: 'white',
+            textShadow: '3px 3px 0 #000, -3px -3px 0 #000, 3px -3px 0 #000, -3px 3px 0 #000',
+            fontFamily: 'system-ui, -apple-system, sans-serif',
+            letterSpacing: '-0.02em',
+            lineHeight: 1,
+            zIndex: 1,
+            position: 'relative',
+          }}
+        >
+          {symbol}
+        </span>
+        {priceDisplay && (
+          <span
+            style={{
+              fontSize: priceFontSize,
+              fontWeight: 700,
+              color: '#22c55e',
+              textShadow: '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000',
+              fontFamily: 'system-ui, -apple-system, sans-serif',
+              marginTop: 8,
+              lineHeight: 1,
+              zIndex: 1,
+              position: 'relative',
+            }}
+          >
+            {priceDisplay}
+          </span>
         )}
       </div>
     </div>
   );
 };
 
-const MoonNode = ({ node, zoom }: { node: GalaxyNode; zoom: number }) => {
-  // Show labels when zoomed in just a bit
-  const showLabel = zoom > 0.7;
-
-  // Extract ticker and price
+// --- Moon Component ---
+const MoonNode = ({ node }: { node: GalaxyNode }) => {
+  const size = node.radius * 2; // diameter
   const ticker = 'symbol' in node.data ? node.data.symbol : '';
-  const price = 'price' in node.data && typeof node.data.price === 'number' ? node.data.price : null;
+  const price = ('price' in node.data && typeof node.data.price === 'number') ? node.data.price : null;
+  const icon = ('icon' in node.data && typeof node.data.icon === 'string') ? node.data.icon : null;
+  const glowIntensity = node.collisionGlow || 0;
+
+  const formatPrice = (p: number) => {
+    if (p >= 1000) return `$${(p / 1000).toFixed(1)}k`;
+    if (p >= 1) return `$${p.toFixed(2)}`;
+    if (p >= 0.01) return `$${p.toFixed(4)}`;
+    if (p >= 0.0001) return `$${p.toFixed(6)}`;
+    return `$${p.toPrecision(3)}`;
+  };
+
+  // Improved font sizing: scale proportionally with moon size
+  // Larger moons should have larger, more readable text
+  const tickerLen = Math.max(1, ticker.length);
+  
+  // Base font size scales with diameter - use 28% of diameter as baseline
+  // Longer tickers get slightly smaller font but not as aggressively
+  const lengthFactor = Math.max(0.6, 1 - (tickerLen - 3) * 0.06); // 3-char = 1.0, 5-char = 0.88, 7-char = 0.76
+  const baseFontSize = size * 0.28 * lengthFactor;
+  const fontSize = Math.max(12, Math.min(48, Math.round(baseFontSize)));
+  const priceFontSize = Math.max(10, Math.min(36, Math.round(fontSize * 0.75)));
+  
+  // Icon scales with moon size - 65% of diameter for good visibility
+  const iconSize = Math.max(20, Math.round(size * 0.65));
+  
+  // Only show price on larger moons where it's readable
+  const showPrice = size > 35 && fontSize >= 12;
 
   return (
-    <motion.div
-      className={`absolute rounded-full ${visualConfig.holoStyle.shadow} ${visualConfig.holoStyle.opacity} ${visualConfig.holoStyle.border}`}
+    <div
       style={{
+        position: 'absolute',
         left: node.x,
         top: node.y,
-        width: node.radius * 2,
-        height: node.radius * 2,
-        x: -node.radius,
-        y: -node.radius,
-        backgroundColor: node.color,
+        transform: 'translate(-50%, -50%)',
         zIndex: 30,
-        willChange: 'transform', // Optimize for animations
-        backfaceVisibility: 'hidden', // Prevent blur on some browsers
-        WebkitFontSmoothing: 'antialiased', // Sharp text
       }}
     >
-      {/* Centered Text Labels - INSIDE the moon like planets */}
-      {showLabel && ticker && (
-        <div
-          className="absolute pointer-events-none flex flex-col items-center justify-center overflow-hidden"
-          style={{
-            left: '50%',
-            top: '50%',
-            transform: 'translate(-50%, -50%) translateZ(0)', // Force GPU layer for sharpness
-            width: '90%',
-            height: '90%',
-            textRendering: 'optimizeLegibility',
-          }}
-        >
-          <div className="text-white font-bold drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] antialiased text-center" style={{ fontSize: '7px' }}>
-            {ticker}
-          </div>
-          {price && (
-            <div className="text-white/90 drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] antialiased text-center" style={{ fontSize: '5px' }}>
-              ${price.toFixed(2)}
-            </div>
-          )}
-        </div>
-      )}
-    </motion.div>
+      <div
+        style={{
+          position: 'relative',
+          width: size,
+          height: size,
+          borderRadius: '50%',
+          backgroundColor: node.color,
+          border: '1px solid rgba(255,255,255,0.3)',
+          boxShadow: glowIntensity > 0.05 
+            ? `0 0 ${10 + glowIntensity * 15}px rgba(255,255,255,${glowIntensity * 0.5})` 
+            : '0 0 8px rgba(0,0,0,0.5), inset 0 -2px 6px rgba(0,0,0,0.3)',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          overflow: 'hidden',
+        }}
+      >
+        {/* Background icon for moons */}
+        {icon && (
+          <img
+            src={icon}
+            alt=""
+            style={{
+              position: 'absolute',
+              width: iconSize,
+              height: iconSize,
+              left: '50%',
+              top: '50%',
+              transform: 'translate(-50%, -50%)',
+              opacity: 0.35,
+              zIndex: 0,
+              pointerEvents: 'none',
+              borderRadius: '50%',
+            }}
+          />
+        )}
+        {ticker && (
+          <>
+            <span
+              style={{
+                fontSize,
+                fontWeight: 800,
+                color: 'white',
+                textShadow: '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000',
+                lineHeight: 1.1,
+                fontFamily: 'system-ui, -apple-system, sans-serif',
+                letterSpacing: '-0.01em',
+                zIndex: 1,
+                position: 'relative',
+              }}
+            >
+              {ticker}
+            </span>
+            {showPrice && price !== null && (
+              <span
+                style={{
+                  fontSize: priceFontSize,
+                  fontWeight: 700,
+                  color: '#22c55e',
+                  textShadow: '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000',
+                  lineHeight: 1.1,
+                  fontFamily: 'system-ui, -apple-system, sans-serif',
+                  zIndex: 1,
+                  position: 'relative',
+                }}
+              >
+                {formatPrice(price)}
+              </span>
+            )}
+          </>
+        )}
+      </div>
+    </div>
   );
 };
 
-const OrbitRing = ({ radius }: { radius: number }) => (
+// --- Orbit Ring ---
+const OrbitRing = memo(({ radius }: { radius: number }) => (
   <div
-    className="absolute rounded-full border border-white/5 pointer-events-none"
     style={{
+      position: 'absolute',
       left: -radius,
       top: -radius,
       width: radius * 2,
       height: radius * 2,
+      borderRadius: '50%',
+      border: '1px solid rgba(255,255,255,0.05)',
+      pointerEvents: 'none',
     }}
   />
-);
+));
 
+OrbitRing.displayName = 'OrbitRing';
+
+// ============================================================================
+// MAIN COMPONENT
+// ============================================================================
 export default function CryptoPlanets() {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -172,11 +306,12 @@ export default function CryptoPlanets() {
   const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 0.6 });
   const [minZoom, setMinZoom] = useState(0.1);
   const [isLoading, setIsLoading] = useState(true);
-
+  
   const requestRef = useRef<number>(0);
   const previousTimeRef = useRef<number>(0);
   const galaxyStateRef = useRef<GalaxyState | null>(null);
 
+  // Initialize galaxy
   useEffect(() => {
     async function init() {
       setIsLoading(true);
@@ -185,9 +320,13 @@ export default function CryptoPlanets() {
         const initialState = initGalaxyState(data);
 
         const maxOrbit = Math.max(...initialState.nodes.map(n => n.orbitRadius)) + 100;
+        // Calculate zoom that fits entire galaxy, but clamp to reasonable range
         const fitZoom = Math.min(window.innerWidth, window.innerHeight) / (maxOrbit * 2.2);
-        setMinZoom(fitZoom);
-        setCamera(prev => ({ ...prev, zoom: Math.max(fitZoom, 0.5) }));
+        // Min zoom should allow seeing entire galaxy, but never less than 0.05 or more than 0.5
+        const clampedMinZoom = Math.max(0.05, Math.min(0.5, fitZoom));
+        setMinZoom(clampedMinZoom);
+        // Initial zoom: comfortable viewing, not too zoomed in or out
+        setCamera(prev => ({ ...prev, zoom: Math.max(clampedMinZoom, Math.min(0.8, fitZoom * 1.5)) }));
 
         galaxyStateRef.current = initialState;
         setGalaxyState(initialState);
@@ -200,39 +339,47 @@ export default function CryptoPlanets() {
     init();
   }, [weightMode]);
 
-  const animate = (time: number) => {
-    if (previousTimeRef.current !== undefined && galaxyStateRef.current) {
-      const deltaTime = time - previousTimeRef.current;
-      const dt = Math.min(deltaTime, 32) / 16.67;
-
-      tickGalaxy(galaxyStateRef.current, dt);
-      setGalaxyState({ ...galaxyStateRef.current });
-    }
-    previousTimeRef.current = time;
-    requestRef.current = requestAnimationFrame(animate);
-  };
-
+  // Animation loop
   useEffect(() => {
+    const animate = (time: number) => {
+      if (previousTimeRef.current !== undefined && galaxyStateRef.current) {
+        const deltaTime = time - previousTimeRef.current;
+        const dt = Math.min(deltaTime, 32) / 16.67;
+
+        // Update physics
+        tickGalaxy(galaxyStateRef.current, dt);
+        
+        // Trigger re-render with new state reference
+        setGalaxyState({ ...galaxyStateRef.current });
+      }
+      previousTimeRef.current = time;
+      requestRef.current = requestAnimationFrame(animate);
+    };
+
     requestRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(requestRef.current);
   }, []);
 
-  const handleWheel = (e: React.WheelEvent) => {
+  // Camera handlers - SMOOTH proportional zoom
+  const handleWheel = useCallback((e: React.WheelEvent) => {
     e.preventDefault();
-    const zoomSensitivity = 0.001;
-    const newZoom = Math.max(minZoom, Math.min(3, camera.zoom - e.deltaY * zoomSensitivity));
-    setCamera(prev => ({ ...prev, zoom: newZoom }));
-  };
+    // Proportional zoom: multiply by factor for smooth feel
+    const zoomFactor = e.deltaY > 0 ? 0.92 : 1.08; // 8% per scroll step
+    setCamera(prev => ({
+      ...prev,
+      zoom: Math.max(minZoom, Math.min(10, prev.zoom * zoomFactor))
+    }));
+  }, [minZoom]);
 
   const [isDragging, setIsDragging] = useState(false);
   const lastMousePos = useRef({ x: 0, y: 0 });
 
-  const handleMouseDown = (e: React.MouseEvent) => {
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
     setIsDragging(true);
     lastMousePos.current = { x: e.clientX, y: e.clientY };
-  };
+  }, []);
 
-  const handleMouseMove = (e: React.MouseEvent) => {
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isDragging) return;
     const dx = e.clientX - lastMousePos.current.x;
     const dy = e.clientY - lastMousePos.current.y;
@@ -244,9 +391,9 @@ export default function CryptoPlanets() {
     }));
 
     lastMousePos.current = { x: e.clientX, y: e.clientY };
-  };
+  }, [isDragging]);
 
-  const handleMouseUp = () => setIsDragging(false);
+  const handleMouseUp = useCallback(() => setIsDragging(false), []);
 
   if (isLoading || !galaxyState) {
     return (
@@ -268,31 +415,34 @@ export default function CryptoPlanets() {
     >
       <Starfield />
 
+      {/* Galaxy container */}
       <div
         className="absolute inset-0 flex items-center justify-center pointer-events-none"
         style={{
           transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`,
           transformOrigin: 'center center',
-          willChange: 'transform',
         }}
       >
+        {/* Orbit rings */}
         {galaxyState.planetNodes.map(node => (
           <OrbitRing key={`ring-${node.id}`} radius={node.orbitRadius} />
         ))}
 
-        <AnimatePresence>
-          <PlanetNode key={`sun-${galaxyState.sunNode.id}`} node={galaxyState.sunNode} zoom={camera.zoom} />
+        {/* Sun */}
+        <PlanetNode key={galaxyState.sunNode.id} node={galaxyState.sunNode} />
 
-          {galaxyState.planetNodes.map(node => (
-            <PlanetNode key={`planet-${node.id}`} node={node} zoom={camera.zoom} />
-          ))}
+        {/* Planets */}
+        {galaxyState.planetNodes.map(node => (
+          <PlanetNode key={node.id} node={node} />
+        ))}
 
-          {galaxyState.moonNodes.map(node => (
-            <MoonNode key={`moon-${node.id}`} node={node} zoom={camera.zoom} />
-          ))}
-        </AnimatePresence>
+        {/* Moons */}
+        {galaxyState.moonNodes.map(node => (
+          <MoonNode key={node.id} node={node} />
+        ))}
       </div>
 
+      {/* UI Overlay */}
       <div className="absolute top-0 left-0 w-full h-full pointer-events-none p-6 flex flex-col justify-between z-50">
         <div className="flex items-start justify-between">
           <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10">
@@ -305,10 +455,12 @@ export default function CryptoPlanets() {
             value={weightMode}
             onChange={(e) => setWeightMode(e.target.value as WeightMode)}
           >
-            <option value="TVL">Sort by TVL</option>
-            <option value="MarketCap">Sort by Market Cap</option>
-            <option value="Volume24h">Sort by Volume</option>
-            <option value="Change24h">Sort by 24h Change</option>
+            <option value="TVL">Size by TVL</option>
+            <option value="MarketCap">Size by Market Cap</option>
+            <option value="Volume24h">Size by 24h Volume</option>
+            <option value="Change24h">Size by 24h Change</option>
+            <option value="Change24h">Size by 4h Change</option>
+            <option value="Change24h">Size by 1h Change</option>
           </select>
         </div>
 
@@ -322,7 +474,6 @@ export default function CryptoPlanets() {
         </div>
       </div>
 
-      {/* Footer with API attribution and donation */}
       <Footer />
     </div>
   );

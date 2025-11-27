@@ -1,10 +1,27 @@
 import { GalaxyData, WeightMode, ChainData } from "@/types/galaxy";
 import { fetchChainsTVL } from "./defiLlama";
-import { fetchTokensForChain } from "./dexScreener";
+import { fetchHEXData } from "./dexScreener";
 import { fetchBTCStats } from "./coinGecko";
-import { dataConfig } from "@/config/dataConfig";
+import { dataConfig, CHAIN_TOKENS, CHAIN_NATIVE_SYMBOLS, STABLECOIN_SYMBOLS, WRAPPED_PATTERNS } from "@/config/dataConfig";
 import { debugLog } from "@/utils/debug";
 import { validateGalaxyData } from "@/utils/validation";
+
+// ===== HELPER FUNCTIONS =====
+
+/** Check if a symbol is a stablecoin */
+function isStable(symbol: string): boolean {
+    return STABLECOIN_SYMBOLS.has(symbol.toUpperCase());
+}
+
+/** Check if a symbol is a wrapped/derivative token */
+function isWrapped(symbol: string): boolean {
+    return WRAPPED_PATTERNS.has(symbol.toUpperCase());
+}
+
+/** Check if a symbol is a chain native token (should be planet, not moon) */
+function isChainNative(symbol: string): boolean {
+    return CHAIN_NATIVE_SYMBOLS.has(symbol.toUpperCase());
+}
 
 export async function loadGalaxyData(weightMode: WeightMode): Promise<GalaxyData> {
     debugLog('data', `Loading galaxy data with weight mode: ${weightMode}`);
@@ -32,54 +49,91 @@ export async function loadGalaxyData(weightMode: WeightMode): Promise<GalaxyData
             .sort((a, b) => b.weight - a.weight)
             .slice(0, dataConfig.maxChains);
 
-        // 3. Fetch Prices (Batch)
+        // 3. Fetch Prices and Icons (Batch)
         const geckoIds = weightedChains
             .map(c => c.geckoId)
             .filter((id): id is string => id !== undefined && id !== null);
 
-        debugLog('data', `Fetching prices for ${geckoIds.length} chains`);
-        const { fetchCoinsPrices } = await import('./coinGecko');
-        const chainPrices = await fetchCoinsPrices(geckoIds);
+        debugLog('data', `Fetching prices and icons for ${geckoIds.length} chains`);
+        const { fetchCoinsPrices, fetchCoinIcons } = await import('./coinGecko');
+        const [chainPrices, chainIcons] = await Promise.all([
+            fetchCoinsPrices(geckoIds),
+            fetchCoinIcons(geckoIds)
+        ]);
 
-        // Update chain prices
+        // Apply chain prices and icons to weighted chains
+        weightedChains.forEach(chain => {
+            if (chain.geckoId) {
+                if (chainPrices[chain.geckoId]) {
+                    chain.price = chainPrices[chain.geckoId];
+                }
+                if (chainIcons[chain.geckoId]) {
+                    chain.icon = chainIcons[chain.geckoId];
+                }
+            }
+        });
+
         const totalVal = btcData.marketCap + allChains.reduce((sum, c) => sum + c.tvl, 0);
 
-        // 4. Fetch Tokens (Parallel per chain)
+        // Fetch HEX data from DexScreener (CoinGecko has broken market cap data for HEX)
+        const hexData = await fetchHEXData();
+
+        // 4. Fetch Tokens using CURATED CHAIN_TOKENS list
         const chainsWithTokens = await Promise.all(
             weightedChains.map(async (chain) => {
+                // Get the curated token list for this chain
+                const curatedTokenIds = CHAIN_TOKENS[chain.id];
+                
+                if (!curatedTokenIds || curatedTokenIds.length === 0) {
+                    debugLog('data', `No curated tokens for chain ${chain.id}`);
+                    return { ...chain, tokens: [] };
+                }
+
+                // Filter out HEX IDs - we'll add HEX from DexScreener separately
+                const tokenIdsWithoutHex = curatedTokenIds.filter(id => 
+                    id !== 'hex' && id !== 'hex-pulsechain'
+                );
+
+                // Fetch tokens from CoinGecko using the curated IDs
                 let tokens: any[] = [];
-
-                // Check for priority tokens first
-                const priorityList = dataConfig.priorityTokens[chain.id];
-
-                if (priorityList && priorityList.length > 0) {
-                    debugLog('data', `Fetching ${priorityList.length} priority tokens for ${chain.id}`);
+                if (tokenIdsWithoutHex.length > 0) {
+                    debugLog('data', `Fetching ${tokenIdsWithoutHex.length} curated tokens for ${chain.id}`);
                     const { fetchSpecificTokens } = await import("./coinGecko");
-                    tokens = await fetchSpecificTokens(priorityList);
+                    tokens = await fetchSpecificTokens(tokenIdsWithoutHex);
+                    debugLog('data', `Got ${tokens.length} tokens for ${chain.id}`);
                 }
 
-                // If no priority tokens or they failed/returned few, fall back to ecosystem/dexscreener
-                if (tokens.length < dataConfig.tokensPerChain) {
-                    const ecosystemCategory = dataConfig.chainEcosystemCategory[chain.id];
-                    if (ecosystemCategory) {
-                        const { fetchEcosystemTokensFromCoinGecko } = await import("./coinGecko");
-                        const moreTokens = await fetchEcosystemTokensFromCoinGecko(ecosystemCategory, dataConfig.tokensPerChain);
-                        // Merge and deduplicate
-                        const existingIds = new Set(tokens.map(t => t.address)); // address here is geckoID
-                        moreTokens.forEach(t => {
-                            if (!existingIds.has(t.address)) {
-                                tokens.push(t);
-                            }
-                        });
-                    } else {
-                        // Fallback to DexScreener
-                        const dexTokens = await fetchTokensForChain(chain.id, dataConfig.tokensPerChain);
-                        tokens = [...tokens, ...dexTokens];
-                    }
-                }
+                // Apply final safety filters (in case CoinGecko returns something weird)
+                tokens = tokens.filter(t => {
+                    const symbol = (t.symbol || "").toUpperCase();
+                    if (!symbol) return false;
+                    if (isStable(symbol)) return false;
+                    if (isWrapped(symbol)) return false;
+                    if (isChainNative(symbol)) return false;
+                    return true;
+                });
 
-                // Slice to limit
+                // Sort by marketCap descending
+                tokens = tokens.sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0));
+
+                // Limit to configured max
                 tokens = tokens.slice(0, dataConfig.tokensPerChain);
+
+                // ===== ADD HEX FROM DEXSCREENER =====
+                // CoinGecko has broken market_cap data for HEX, so we use DexScreener
+                if (chain.id === 'ethereum' && hexData.eHEX) {
+                    // Remove any existing HEX entry (shouldn't happen with curated list, but safety check)
+                    tokens = tokens.filter(t => t.symbol?.toUpperCase() !== 'HEX');
+                    // Add eHEX at the front (high priority)
+                    tokens.unshift(hexData.eHEX);
+                    console.log('[HEX] ✅ Added eHEX to Ethereum:', hexData.eHEX.symbol, hexData.eHEX.marketCap);
+                } else if (chain.id === 'pulsechain' && hexData.pHEX) {
+                    tokens = tokens.filter(t => t.symbol?.toUpperCase() !== 'HEX');
+                    tokens.unshift(hexData.pHEX);
+                    console.log('[HEX] ✅ Added pHEX to PulseChain:', hexData.pHEX.symbol, hexData.pHEX.marketCap);
+                }
+
+                console.log(`[${chain.id.toUpperCase()}] Final tokens:`, tokens.map(t => t.symbol).join(', '));
 
                 return { ...chain, tokens };
             })

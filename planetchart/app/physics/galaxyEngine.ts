@@ -5,12 +5,18 @@ import type { GalaxyData, GalaxyState, GalaxyNode, ChainData, BTCData, WeightMod
 import { physicsConfig } from "@/config/physicsConfig";
 import { debugLog } from "@/utils/debug";
 
+// Store base orbit radii for moons (to decay back to after collision push)
+const baseOrbitRadii = new Map<string, number>();
+
 /**
  * Initialize galaxy physics state from data
  * Determines dynamic sun, assigns orbit radii, and creates nodes
  */
 export function initGalaxyState(data: GalaxyData): GalaxyState {
     debugLog('physics', `initGalaxyState called with mode: ${data.metric}`);
+
+    // Clear base orbit tracking
+    baseOrbitRadii.clear();
 
     const nodes: GalaxyNode[] = [];
 
@@ -101,9 +107,8 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
             const chain = body.data as ChainData;
             const planetRadius = node.radius;
 
-            // Sort tokens by liquidity/importance for hierarchy
-            // Assuming tokens are already sorted by dataLoader, but safety sort here
-            const sortedTokens = [...chain.tokens].sort((a, b) => (b.liquidity || 0) - (a.liquidity || 0));
+            // Sort tokens by marketCap for hierarchy (biggest = most important)
+            const sortedTokens = [...chain.tokens].sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0));
 
             // Split into Moons (Top N) and Meteorites (Rest)
             const moonCount = Math.min(sortedTokens.length, physicsConfig.maxMoonsPerPlanet);
@@ -131,13 +136,44 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
                 const moonX = x + Math.cos(moonAngle) * moonOrbitRadius;
                 const moonY = y + Math.sin(moonAngle) * moonOrbitRadius;
 
-                // Normalize liquidity for sizing (0-1 relative to best token)
-                const maxLiq = moons[0].liquidity || 1;
-                const normLiq = (token.liquidity || 0) / maxLiq;
-                const radius = lerp(physicsConfig.moonMinRadius, physicsConfig.moonMaxRadius, normLiq);
+                // LOG SCALE for dramatic size differentiation
+                // log10($13B) = 10.1, log10($100M) = 8.0 → difference of 2.1
+                const tokenCap = token.marketCap || 1;
+                
+                // Find max and min market cap among this chain's moons
+                const moonCaps = moons.map(m => m.marketCap || 1);
+                const maxMoonCap = Math.max(...moonCaps);
+                const minMoonCap = Math.min(...moonCaps.filter(c => c > 0));
+                
+                // Log scale: normalize between 0 and 1
+                const logMax = Math.log10(maxMoonCap);
+                const logMin = Math.log10(minMoonCap);
+                const logToken = Math.log10(tokenCap);
+                
+                // Normalized 0-1 based on log scale
+                const logRange = logMax - logMin || 1;
+                const normalizedLog = (logToken - logMin) / logRange;
+                
+                // Map to radius range with FULL range utilization
+                let radius = physicsConfig.moonMinRadius + 
+                    normalizedLog * (physicsConfig.moonMaxRadius - physicsConfig.moonMinRadius);
+
+                // Clamp to range
+                radius = Math.max(physicsConfig.moonMinRadius, Math.min(physicsConfig.moonMaxRadius, radius));
+                
+                // Hard cap: moon can never exceed 20% of planet radius
+                const maxMoonRelative = 0.20;
+                if (radius > planetRadius * maxMoonRelative) {
+                    radius = planetRadius * maxMoonRelative;
+                }
+
+                const moonId = `${chain.id}-${token.symbol}-${tIndex}`;
+                
+                // Store base orbit radius for decay
+                baseOrbitRadii.set(moonId, moonOrbitRadius);
 
                 const moonNode: GalaxyNode = {
-                    id: `${chain.id}-${token.symbol}-${tIndex}`,
+                    id: moonId,
                     type: 'moon',
                     parentId: chain.id,
                     x: moonX,
@@ -164,23 +200,22 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
 
             // 2. Create METEORITES (Orbiting Moons)
             meteorites.forEach((token, mIndex) => {
-                if (createdMoons.length === 0) return; // No moons to orbit
+                if (createdMoons.length === 0) return;
 
-                // Assign parent moon (Round Robin)
                 const parentMoon = createdMoons[mIndex % createdMoons.length];
-
-                // Orbit around parent moon
                 const orbitRadius = physicsConfig.meteoriteOrbitRadius + (Math.random() * 5);
                 const angle = Math.random() * Math.PI * 2;
 
                 const metX = parentMoon.x + Math.cos(angle) * orbitRadius;
                 const metY = parentMoon.y + Math.sin(angle) * orbitRadius;
 
-                // Size mapping
                 const radius = physicsConfig.meteoriteMinRadius + Math.random() * (physicsConfig.meteoriteMaxRadius - physicsConfig.meteoriteMinRadius);
 
+                const metId = `${chain.id}-met-${token.symbol}-${mIndex}`;
+                baseOrbitRadii.set(metId, orbitRadius);
+
                 const metNode: GalaxyNode = {
-                    id: `${chain.id}-met-${token.symbol}-${mIndex}`,
+                    id: metId,
                     type: 'meteorite',
                     parentId: parentMoon.id, // Parent is the MOON
                     x: metX,
@@ -218,17 +253,13 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
 
 /**
  * Advance physics simulation by one tick
- * Implements "N-body lite" with deterministic orbit blending for stability
+ * Moons/meteorites use deterministic orbits, planets use velocity physics
  */
 export function tickGalaxy(state: GalaxyState, dt: number): void {
     const { nodes } = state;
 
-    // 1. Reset Forces & Prepare
-    // We don't reset velocity here, we modify it.
-    // Identify groups for optimized gravity
     const planets = nodes.filter(n => n.type === 'planet');
     const moons = nodes.filter(n => n.type === 'moon');
-    const asteroids = nodes.filter(n => n.type === 'meteorite'); // Using 'meteorite' as 'asteroid' for now
 
     for (const node of nodes) {
         if (node.type === 'sun') {
@@ -236,31 +267,12 @@ export function tickGalaxy(state: GalaxyState, dt: number): void {
             continue;
         }
 
-        // --- Step 1: Apply Gravity (N-Body Lite) ---
-        // Sun pulls everything
-        applyGravity(node, state.sunNode, physicsConfig.sunGravity, dt);
-
-        // Planets pull their own moons
-        if (node.type === 'moon' && node.parentId) {
-            const parent = planets.find(p => p.id === node.parentId);
-            if (parent) {
-                applyGravity(node, parent, physicsConfig.planetGravity, dt);
-            }
-        }
-
-        // Moons pull their own asteroids
-        if (node.type === 'meteorite' && node.parentId) {
-            const parent = moons.find(m => m.id === node.parentId);
-            if (parent) {
-                applyGravity(node, parent, physicsConfig.moonGravity, dt);
-            }
-        }
-
-        // --- Step 2: Deterministic Orbit Correction ---
-        // Calculate ideal orbital position
+        // --- Step 1: Advance orbit angle ---
         node.orbitAngle += node.angularVelocity * dt;
         if (node.orbitAngle > Math.PI * 2) node.orbitAngle -= Math.PI * 2;
+        if (node.orbitAngle < 0) node.orbitAngle += Math.PI * 2;
 
+        // --- Step 2: Calculate parent center ---
         let centerX = 0;
         let centerY = 0;
         let parentNode: GalaxyNode | undefined;
@@ -276,104 +288,109 @@ export function tickGalaxy(state: GalaxyState, dt: number): void {
             }
         }
 
+        // --- Step 3: Decay orbit radius back to base ---
+        const baseRadius = baseOrbitRadii.get(node.id);
+        if (baseRadius !== undefined && node.orbitRadius > baseRadius) {
+            // Slowly decay back to base orbit (0.5% per tick)
+            node.orbitRadius = node.orbitRadius * 0.995 + baseRadius * 0.005;
+        }
+
+        // --- Step 4: Calculate ideal position and set it ---
         const idealX = centerX + Math.cos(node.orbitAngle) * node.orbitRadius;
         const idealY = centerY + Math.sin(node.orbitAngle) * node.orbitRadius;
 
-        // Blend: 80% Physics (current pos + vel), 20% Correction (pull towards ideal)
-        // Instead of hard setting, we apply a "correction force" or spring
-        const correctionStrength = physicsConfig.orbitCorrectionStrength; // Use config value
-        const dx = idealX - node.x;
-        const dy = idealY - node.y;
+        if (node.type === 'moon' || node.type === 'meteorite') {
+            // Deterministic: directly set position
+            node.x = idealX;
+            node.y = idealY;
+            node.vx = 0;
+            node.vy = 0;
+        } else if (node.type === 'planet') {
+            // Planets: Use deterministic orbits like moons for stability
+            // The gravity/velocity system was causing drift over time
+            // Just set position directly based on orbit angle and radius
+            node.x = idealX;
+            node.y = idealY;
+            node.vx = 0;
+            node.vy = 0;
+        }
 
-        node.vx += dx * correctionStrength * dt;
-        node.vy += dy * correctionStrength * dt;
-
-        // --- Step 3: Apply Comprehensive Collision Physics (All Pairs) ---
-        // Prevent pass-through with soft repulsion + damping for ALL entity combinations
-
-        if (node.type === 'planet') {
-            // Planet vs Planet
-            planets.forEach(other => {
-                if (node.id !== other.id) {
-                    applyRepulsion(node, other, dt, 1.0);
-                }
-            });
-            // Planet vs Moon (all moons, not just children)
-            moons.forEach(moon => {
-                const isSameSystem = moon.parentId === node.id;
-                applyRepulsion(node, moon, dt, isSameSystem ? 0.5 : physicsConfig.repulsionCrossChain);
-            });
-        } else if (node.type === 'moon') {
-            // Moon vs Moon (same system - strong, cross-system - weak)
+        // --- Step 5: Collision detection (moon vs moon, moon vs planet) ---
+        if (node.type === 'moon') {
+            // Moon vs other moons (same parent = stronger push)
             moons.forEach(other => {
                 if (node.id !== other.id) {
-                    const isSameSystem = node.parentId === other.parentId;
-                    const strength = isSameSystem ? 2.0 : physicsConfig.repulsionCrossChain;
-                    applyRepulsion(node, other, dt, strength);
+                    const sameParent = node.parentId === other.parentId;
+                    applyMoonCollision(node, other, sameParent ? 1.5 : 0.3);
                 }
             });
 
-            // Moon vs Planet (parent and other planets)
-            planets.forEach(planet => {
-                const isParent = planet.id === node.parentId;
-                const strength = isParent ? 0.5 : physicsConfig.repulsionCrossChain;
-                applyRepulsion(node, planet, dt, strength);
-            });
-
-            // Moon vs Sun
-            applyRepulsion(node, state.sunNode, dt, physicsConfig.repulsionCrossChain * 0.5);
-
-            // Moon vs Meteorite
-            asteroids.forEach(asteroid => {
-                const isSameSystem = asteroid.parentId === node.id;
-                applyRepulsion(node, asteroid, dt, isSameSystem ? 1.0 : physicsConfig.repulsionCrossChain);
-            });
-        } else if (node.type === 'meteorite') {
-            // Meteorite vs Meteorite
-            asteroids.forEach(other => {
-                if (node.id !== other.id) {
-                    const isSameSystem = node.parentId === other.parentId;
-                    applyRepulsion(node, other, dt, isSameSystem ? 1.5 : physicsConfig.repulsionCrossChain);
-                }
-            });
-
-            // Meteorite vs Moon (parent and others)
-            moons.forEach(moon => {
-                const isParent = moon.id === node.parentId;
-                applyRepulsion(node, moon, dt, isParent ? 0.8 : physicsConfig.repulsionCrossChain);
-            });
-
-            // Meteorite vs Planet
-            planets.forEach(planet => {
-                applyRepulsion(node, planet, dt, physicsConfig.repulsionCrossChain);
-            });
-
-            // Meteorite vs Sun
-            applyRepulsion(node, state.sunNode, dt, physicsConfig.repulsionCrossChain * 0.3);
+            // Moon vs parent planet (push outward)
+            if (parentNode) {
+                applyMoonCollision(node, parentNode, 2.0);
+            }
         }
 
-        // --- Step 4: Update Position & Velocity ---
-        // Apply type-specific friction (moons get more damping due to faster movement)
-        const frictionValue = node.type === 'moon' || node.type === 'meteorite'
-            ? physicsConfig.moonFriction
-            : physicsConfig.friction;
-        node.vx *= frictionValue;
-        node.vy *= frictionValue;
+        // --- Step 6: Velocity physics only needed for future non-deterministic bodies ---
+        // Planets are now deterministic, so this block is a fallback
+        if (node.type !== 'planet' && node.type !== 'moon' && node.type !== 'meteorite' && node.type !== 'sun') {
+            node.vx *= physicsConfig.friction;
+            node.vy *= physicsConfig.friction;
 
-        // Cap Velocity (Stability)
-        const vSq = node.vx * node.vx + node.vy * node.vy;
-        if (vSq > physicsConfig.maxVelocity * physicsConfig.maxVelocity) {
-            const v = Math.sqrt(vSq);
-            node.vx = (node.vx / v) * physicsConfig.maxVelocity;
-            node.vy = (node.vy / v) * physicsConfig.maxVelocity;
+            const vSq = node.vx * node.vx + node.vy * node.vy;
+            if (vSq > physicsConfig.maxVelocity * physicsConfig.maxVelocity) {
+                const v = Math.sqrt(vSq);
+                node.vx = (node.vx / v) * physicsConfig.maxVelocity;
+                node.vy = (node.vy / v) * physicsConfig.maxVelocity;
+            }
+
+            node.x += node.vx * dt;
+            node.y += node.vy * dt;
+
+            // Bounds check
+            const distFromCenter = Math.sqrt(node.x * node.x + node.y * node.y);
+            if (distFromCenter > physicsConfig.galaxyBounds) {
+                const nx = node.x / distFromCenter;
+                const ny = node.y / distFromCenter;
+                node.x = nx * physicsConfig.galaxyBounds;
+                node.y = ny * physicsConfig.galaxyBounds;
+            }
         }
 
-        // Update Position
-        node.x += node.vx * dt;
-        node.y += node.vy * dt;
-
-        // Decay Visuals
+        // Decay visuals
         decayVisuals(node);
+    }
+}
+
+/**
+ * Apply collision between moons - pushes orbit radius outward temporarily
+ */
+function applyMoonCollision(node: GalaxyNode, other: GalaxyNode, strength: number) {
+    const dx = node.x - other.x;
+    const dy = node.y - other.y;
+    const dist = Math.sqrt(dx * dx + dy * dy) || 0.001;
+
+    const sumRadii = node.radius + other.radius;
+    const minDist = sumRadii + physicsConfig.collidePadding;
+
+    if (dist < minDist) {
+        const overlap = minDist - dist;
+        
+        // Push orbit radius outward (will decay back)
+        const pushAmount = overlap * 0.15 * strength;
+        node.orbitRadius += pushAmount;
+        
+        // Cap max orbit expansion to 50% above base
+        const baseRadius = baseOrbitRadii.get(node.id);
+        if (baseRadius !== undefined) {
+            const maxOrbit = baseRadius * 1.5;
+            if (node.orbitRadius > maxOrbit) {
+                node.orbitRadius = maxOrbit;
+            }
+        }
+
+        // Trigger glow
+        node.collisionGlow = Math.min(1.0, (node.collisionGlow || 0) + 0.5);
     }
 }
 
@@ -409,61 +426,6 @@ function applyGravity(node: GalaxyNode, attractor: GalaxyNode, G: number, dt: nu
     node.vy += ny * accel * dt;
 }
 
-function applyRepulsion(node: GalaxyNode, other: GalaxyNode, dt: number, multiplier: number = 1.0) {
-    const dx = node.x - other.x;
-    const dy = node.y - other.y;
-    const distSq = dx * dx + dy * dy;
-    const dist = Math.sqrt(distSq) || 0.001; // Avoid divide by zero
-
-    const sumRadii = node.radius + other.radius;
-    const minDist = sumRadii + physicsConfig.collidePadding;
-
-    if (dist < minDist) {
-        // 1. Soft Repulsion (Linear Spring)
-        // Force proportional to normalized overlap (0 to 1)
-        const overlap = minDist - dist;
-        const overlapRatio = overlap / sumRadii;
-        const forceMag = physicsConfig.repulsion * overlapRatio * multiplier;
-
-        const nx = dx / dist;
-        const ny = dy / dist;
-
-        // 2. Collision Damping (Inelasticity)
-        // Project relative velocity onto collision normal
-        const rvx = node.vx - other.vx;
-        const rvy = node.vy - other.vy;
-        const relVelProj = rvx * nx + rvy * ny;
-
-        // Apply damping if moving towards each other (relVelProj < 0)
-        let dampingForce = 0;
-        if (relVelProj < 0) {
-            dampingForce = -physicsConfig.damper * relVelProj;
-        }
-
-        const totalForce = forceMag + dampingForce;
-
-        // Apply to this node
-        // Note: In a full N-body loop where we check every pair once, we'd apply to both.
-        // Here we iterate all nodes and check neighbors, so 'other' will eventually be 'node'.
-        // However, for damping to work best, we should apply to both or ensure symmetry.
-        // Given the loop structure (node vs all planets/moons), it's safer to apply to 'node' only
-        // effectively treating 'other' as an immovable wall for this calculation, 
-        // BUT 'other' will get its turn. 
-        // To prevent double-counting or asymmetry issues with damping, we should be careful.
-        // For now, applying to node is consistent with previous logic.
-
-        // F = ma -> a = F/m
-        const nodeMass = node.mass || 1;
-        const accel = totalForce / nodeMass;
-
-        node.vx += nx * accel * dt;
-        node.vy += ny * accel * dt;
-
-        // Trigger Glow
-        node.collisionGlow = 1.0;
-    }
-}
-
 function resetNodePhysics(node: GalaxyNode) {
     node.x = 0;
     node.y = 0;
@@ -493,16 +455,20 @@ export function calculateBTCWeight(btc: BTCData, mode: WeightMode): number {
     }
 }
 
-export function calculatePlanetRadius(weight: number, minWeight: number, maxWeight: number): number {
+export function calculatePlanetRadius(weight: number, _minWeight: number, sunWeight: number): number {
     if (weight <= 0) return physicsConfig.minPlanetRadius;
 
-    const logWeight = Math.log10(weight || 1);
-    const logMin = Math.log10(minWeight || 1);
-    const logMax = Math.log10(maxWeight || 1);
+    // CORRECT SQRT SCALING: Area proportional to market cap relative to Sun
+    // Formula: radius = sunRadius * sqrt(weight / sunWeight)
+    // This ensures: if BTC is 5x ETH's cap, ETH area = BTC area / 5, ETH radius = BTC radius / sqrt(5)
+    const ratio = weight / sunWeight;
+    const sqrtRatio = Math.sqrt(ratio);
+    
+    // Scale from Sun's radius
+    const radius = physicsConfig.sunRadius * sqrtRatio;
 
-    const t = (logWeight - logMin) / (logMax - logMin || 1);
-
-    return physicsConfig.minPlanetRadius + t * (physicsConfig.maxPlanetRadius - physicsConfig.minPlanetRadius);
+    // Clamp between min and max for visibility
+    return Math.max(physicsConfig.minPlanetRadius, Math.min(physicsConfig.maxPlanetRadius, radius));
 }
 
 export function calculateMoonRadius(marketCap: number): number {

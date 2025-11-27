@@ -5,9 +5,10 @@ import { validateBTCData } from "@/utils/validation";
 
 // ===== MOCK FLAG =====
 // Use mock data in tests or when explicitly enabled
-const USE_MOCK_COINGECKO =
-    process.env.USE_MOCK_COINGECKO === "true" ||
-    process.env.NODE_ENV === "test";
+// FORCE FALSE for production/dev to ensure real data is attempted
+const USE_MOCK_COINGECKO = false;
+// process.env.USE_MOCK_COINGECKO === "true" ||
+// process.env.NODE_ENV === "test";
 
 // ===== CACHE STRUCTURES =====
 interface CacheEntry<T> {
@@ -29,6 +30,7 @@ export type RawCoinGeckoEcosystemToken = {
     name: string;
     current_price: number;
     market_cap: number;
+    fully_diluted_valuation?: number | null;
     price_change_percentage_24h: number | null;
     total_volume: number;
     image?: string;
@@ -139,6 +141,7 @@ export async function fetchBTCStats(): Promise<BTCData> {
             volume24h: btcMarket.total_volume,
             change24h: btcMarket.price_change_percentage_24h,
             dominance: 0, // Will be calculated by dataLoader
+            icon: btcMarket.image, // BTC icon from CoinGecko
         };
 
         // Validate output
@@ -231,17 +234,22 @@ export async function fetchEcosystemTokensFromCoinGecko(
         const rawData: RawCoinGeckoEcosystemToken[] = await response.json();
 
         // Map to our TokenData format
-        const tokens: TokenData[] = rawData.map(token => ({
-            symbol: token.symbol.toUpperCase(),
-            name: token.name,
-            address: token.id, // Use CoinGecko ID as address
-            price: token.current_price || 0,
-            change24h: token.price_change_percentage_24h || 0,
-            volume24h: token.total_volume || 0,
-            liquidity: 0, // CoinGecko doesn't provide liquidity in this endpoint
-            marketCap: token.market_cap || 0,
-            color: getTokenColor(token.price_change_percentage_24h || 0),
-        }));
+        // Use fully_diluted_valuation as fallback for market_cap
+        const tokens: TokenData[] = rawData.map(token => {
+            const marketCap = token.market_cap || token.fully_diluted_valuation || 0;
+            return {
+                symbol: token.symbol.toUpperCase(),
+                name: token.name,
+                address: token.id, // Use CoinGecko ID as address
+                price: token.current_price || 0,
+                change24h: token.price_change_percentage_24h || 0,
+                volume24h: token.total_volume || 0,
+                liquidity: 0, // CoinGecko doesn't provide liquidity in this endpoint
+                marketCap,
+                color: getTokenColor(token.price_change_percentage_24h || 0),
+                icon: token.image, // Include icon URL from CoinGecko
+            };
+        });
 
         // Update cache
         ecosystemTokensCache[categoryId] = { data: tokens, lastFetched: now };
@@ -258,7 +266,9 @@ export async function fetchEcosystemTokensFromCoinGecko(
         }
 
         // No cache, return fallback
-        return getMockEcosystemTokens(categoryId, limit);
+        // debugLog('data', `Falling back to mock data for ${categoryId}`);
+        // return getMockEcosystemTokens(categoryId, limit);
+        return []; // Return empty to avoid confusing user with mock data
     }
 }
 
@@ -352,6 +362,11 @@ export async function fetchSpecificTokens(tokenIds: string[]): Promise<TokenData
 
         // Add API key if available
         const apiKey = process.env.COINGECKO_API_KEY || process.env.NEXT_PUBLIC_COINGECKO_API_KEY;
+        if (apiKey) {
+            debugLog('data', `Using CoinGecko API Key: ${apiKey.substring(0, 4)}...`);
+        } else {
+            debugLog('data', `WARNING: No CoinGecko API Key found!`);
+        }
         const headers: HeadersInit = apiKey ? { 'x-cg-demo-api-key': apiKey } : {};
 
         const response = await fetch(url, { headers });
@@ -368,23 +383,66 @@ export async function fetchSpecificTokens(tokenIds: string[]): Promise<TokenData
         const rawData: RawCoinGeckoEcosystemToken[] = await response.json();
 
         // Map to our TokenData format
-        const tokens: TokenData[] = rawData.map(token => ({
-            symbol: token.symbol.toUpperCase(),
-            name: token.name,
-            address: token.id, // Use CoinGecko ID as address
-            price: token.current_price || 0,
-            change24h: token.price_change_percentage_24h || 0,
-            volume24h: token.total_volume || 0,
-            liquidity: 0,
-            marketCap: token.market_cap || 0,
-            color: getTokenColor(token.price_change_percentage_24h || 0),
-        }));
+        // Use fully_diluted_valuation as fallback for market_cap (e.g., HEX has market_cap:0 but FDV:68M)
+        const tokens: TokenData[] = rawData.map(token => {
+            const marketCap = token.market_cap || token.fully_diluted_valuation || 0;
+            return {
+                symbol: token.symbol.toUpperCase(),
+                name: token.name,
+                address: token.id, // Use CoinGecko ID as address
+                price: token.current_price || 0,
+                change24h: token.price_change_percentage_24h || 0,
+                volume24h: token.total_volume || 0,
+                liquidity: 0,
+                marketCap,
+                color: getTokenColor(token.price_change_percentage_24h || 0),
+                icon: token.image, // Include icon URL from CoinGecko
+            };
+        });
 
-        debugLog('data', `✅ Fetched ${tokens.length} specific priority tokens`);
+        debugLog('data', `✅ Fetched ${tokens.length} specific priority tokens (using FDV fallback for market_cap=0)`);
         return tokens;
 
     } catch (error) {
         debugLog('data', `Error fetching specific tokens: ${error}`);
         return [];
+    }
+}
+
+/**
+ * Fetch coin icons from CoinGecko by their IDs
+ * Returns a map of coinId -> icon URL
+ */
+export async function fetchCoinIcons(coinIds: string[]): Promise<Record<string, string>> {
+    if (coinIds.length === 0) return {};
+
+    try {
+        const ids = coinIds.join(',');
+        const url = `${dataConfig.coinGecko.baseURL}${dataConfig.coinGecko.endpoints.markets}?vs_currency=usd&ids=${encodeURIComponent(ids)}&order=market_cap_desc&per_page=${coinIds.length}&page=1&sparkline=false`;
+        
+        const apiKey = process.env.COINGECKO_API_KEY || process.env.NEXT_PUBLIC_COINGECKO_API_KEY;
+        const headers: HeadersInit = apiKey ? { 'x-cg-demo-api-key': apiKey } : {};
+
+        const response = await fetch(url, { headers });
+
+        if (!response.ok) {
+            debugLog('data', `CoinGecko API error for coin icons: ${response.status}`);
+            return {};
+        }
+
+        const rawData: RawCoinGeckoEcosystemToken[] = await response.json();
+        
+        const icons: Record<string, string> = {};
+        rawData.forEach(coin => {
+            if (coin.image) {
+                icons[coin.id] = coin.image;
+            }
+        });
+
+        debugLog('data', `✅ Fetched ${Object.keys(icons).length} coin icons`);
+        return icons;
+    } catch (error) {
+        debugLog('data', `Error fetching coin icons: ${error}`);
+        return {};
     }
 }

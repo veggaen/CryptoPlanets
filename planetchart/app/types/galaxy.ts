@@ -16,6 +16,7 @@ export type TokenData = {
     liquidity: number;        // Total liquidity in USD
     marketCap: number;        // Market capitalization in USD
     color: string;            // Visual color (hex or CSS)
+    icon?: string;            // Icon URL from CoinGecko
 };
 
 // ===== Chain/Blockchain Data =====
@@ -32,6 +33,7 @@ export type ChainData = {
     color: string;            // Visual theme color
     tokens: TokenData[];      // Top tokens on this chain
     geckoId?: string;         // CoinGecko ID for fetching native token price
+    icon?: string;            // Icon URL from CoinGecko
 };
 
 // ===== Bitcoin (Sun) Data =====
@@ -41,6 +43,7 @@ export type BTCData = {
     dominance: number;        // BTC dominance % of total market
     marketCap: number;        // BTC market cap in USD
     volume24h: number;        // 24h trading volume
+    icon?: string;            // Icon URL from CoinGecko
 };
 
 // ===== Complete Galaxy Data =====
