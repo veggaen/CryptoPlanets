@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback, memo, useMemo } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import {
   GalaxyState,
   GalaxyNode,
@@ -8,7 +9,7 @@ import {
 } from "@/types/galaxy";
 import { loadGalaxyData } from "@/services/dataLoader";
 import { initGalaxyState, tickGalaxy } from "@/physics/galaxyEngine";
-import { CAMERA_CONFIG, updateFollowCamera, calculateIdealZoom } from "@/physics/cameraEngine";
+import { CAMERA_CONFIG, updateFollowCamera, calculateIdealZoom, createCinematicTransition, updateCinematicTransition, CameraTransition } from "@/physics/cameraEngine";
 import Starfield from "./Starfield";
 import Footer from "./Footer";
 import GalaxyHUD from "./GalaxyHUD";
@@ -302,15 +303,26 @@ OrbitRing.displayName = 'OrbitRing';
 // ============================================================================
 export default function CryptoPlanets() {
   const containerRef = useRef<HTMLDivElement>(null);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  
+  // Track if we've processed the initial URL params
+  const initialUrlProcessed = useRef(false);
+  const pendingFollowId = useRef<string | null>(null);
 
   const [galaxyState, setGalaxyState] = useState<GalaxyState | null>(null);
   const [weightMode, setWeightMode] = useState<WeightMode>("MarketCap");
   const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 0.05 });
   const [isLoading, setIsLoading] = useState(true);
+  const [linkCopied, setLinkCopied] = useState(false);
   
   // Camera follow state
   const [followingId, setFollowingId] = useState<string | null>(null);
   const [targetZoom, setTargetZoom] = useState<number>(0.05);
+  
+  // Cinematic transition state
+  const transitionRef = useRef<CameraTransition | null>(null);
+  const [isTransitioning, setIsTransitioning] = useState(false);
   
   // Radial menu state
   const [radialMenu, setRadialMenu] = useState<{
@@ -338,6 +350,20 @@ export default function CryptoPlanets() {
   const previousTimeRef = useRef<number>(0);
   const galaxyStateRef = useRef<GalaxyState | null>(null);
 
+  // Read URL params on mount to get initial follow target
+  useEffect(() => {
+    const followParam = searchParams.get('follow');
+    const metricParam = searchParams.get('metric');
+    
+    if (followParam && !initialUrlProcessed.current) {
+      pendingFollowId.current = followParam.toLowerCase();
+    }
+    
+    if (metricParam && ['TVL', 'MarketCap', 'Volume24h', 'Change24h'].includes(metricParam)) {
+      setWeightMode(metricParam as WeightMode);
+    }
+  }, [searchParams]);
+
   // Initialize galaxy
   useEffect(() => {
     async function init() {
@@ -360,8 +386,35 @@ export default function CryptoPlanets() {
     }
     init();
   }, [weightMode]);
+  
+  // Process pending follow from URL after galaxy is loaded
+  useEffect(() => {
+    if (galaxyState && pendingFollowId.current && !initialUrlProcessed.current) {
+      initialUrlProcessed.current = true;
+      const targetId = pendingFollowId.current;
+      pendingFollowId.current = null;
+      
+      // Find the node - could be sun, planet, or moon
+      const node = galaxyState.nodes.find(n => n.id === targetId);
+      if (node) {
+        // Use direct positioning instead of cinematic transition for URL loads
+        // This gives immediate focus without the swoosh animation
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight;
+        const idealZoom = calculateIdealZoom(node.radius, node.type as 'sun' | 'planet' | 'moon', viewportWidth, viewportHeight);
+        
+        setCamera({
+          x: -node.x * idealZoom,
+          y: -node.y * idealZoom,
+          zoom: idealZoom
+        });
+        setTargetZoom(idealZoom);
+        setFollowingId(targetId);
+      }
+    }
+  }, [galaxyState]);
 
-  // Animation loop with camera follow
+  // Animation loop with camera follow and cinematic transitions
   useEffect(() => {
     const animate = (time: number) => {
       if (previousTimeRef.current !== undefined && galaxyStateRef.current) {
@@ -371,8 +424,32 @@ export default function CryptoPlanets() {
         // Update physics
         tickGalaxy(galaxyStateRef.current, dt);
         
-        // Update camera if following a node
-        if (followingId && galaxyStateRef.current) {
+        // Handle cinematic transition (takes priority over regular follow)
+        if (transitionRef.current?.active && galaxyStateRef.current) {
+          const targetNode = galaxyStateRef.current.nodes.find(
+            n => n.id === transitionRef.current?.targetNodeId
+          );
+          
+          if (targetNode) {
+            const result = updateCinematicTransition(
+              transitionRef.current,
+              time,
+              targetNode.x,
+              targetNode.y
+            );
+            
+            setCamera(result.camera);
+            transitionRef.current = result.transition;
+            
+            if (result.complete) {
+              // Transition complete - switch to regular follow mode
+              setIsTransitioning(false);
+              setTargetZoom(result.camera.zoom);
+            }
+          }
+        }
+        // Regular follow mode (after transition completes)
+        else if (followingId && galaxyStateRef.current && !isTransitioning) {
           const targetNode = galaxyStateRef.current.nodes.find(n => n.id === followingId);
           if (targetNode) {
             setCamera(prev => {
@@ -402,27 +479,57 @@ export default function CryptoPlanets() {
 
     requestRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(requestRef.current);
-  }, [followingId, targetZoom]);
+  }, [followingId, targetZoom, isTransitioning]);
 
   // Handle follow planet - from HUD or radial menu
+  // Uses cinematic "swoosh" transition: zoom out → pan via center → zoom in
   const handleFollowPlanet = useCallback((nodeId: string | null) => {
     if (nodeId === null) {
-      // Release camera
+      // Release camera - cancel any transition and update URL
+      transitionRef.current = null;
+      setIsTransitioning(false);
       setFollowingId(null);
+      
+      // Update URL to remove follow param
+      const url = new URL(window.location.href);
+      url.searchParams.delete('follow');
+      window.history.replaceState({}, '', url.toString());
       return;
     }
 
     const node = galaxyStateRef.current?.nodes.find(n => n.id === nodeId);
     if (!node) return;
-
-    setFollowingId(nodeId);
+    
+    // Update URL with follow param
+    const url = new URL(window.location.href);
+    url.searchParams.set('follow', nodeId);
+    window.history.replaceState({}, '', url.toString());
+    
+    // Get sun position for centering during transition
+    const sunNode = galaxyStateRef.current?.sunNode;
+    const sunX = sunNode?.x ?? 0;
+    const sunY = sunNode?.y ?? 0;
     
     // Calculate ideal zoom for this node
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
     const idealZoom = calculateIdealZoom(node.radius, node.type as 'sun' | 'planet' | 'moon', viewportWidth, viewportHeight);
+    
+    // Start cinematic transition
+    transitionRef.current = createCinematicTransition(
+      camera,
+      node.x,
+      node.y,
+      nodeId,
+      idealZoom,
+      sunX,
+      sunY
+    );
+    
+    setIsTransitioning(true);
+    setFollowingId(nodeId);
     setTargetZoom(idealZoom);
-  }, []);
+  }, [camera]);
 
   // Camera wheel zoom - works even when following
   useEffect(() => {
@@ -462,8 +569,10 @@ export default function CryptoPlanets() {
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (!isDragging) return;
     
-    // If dragging while following, release follow mode
-    if (followingId) {
+    // If dragging while following or transitioning, cancel and release
+    if (followingId || isTransitioning) {
+      transitionRef.current = null;
+      setIsTransitioning(false);
       setFollowingId(null);
     }
     
@@ -477,7 +586,7 @@ export default function CryptoPlanets() {
     }));
 
     lastMousePos.current = { x: e.clientX, y: e.clientY };
-  }, [isDragging, followingId]);
+  }, [isDragging, followingId, isTransitioning]);
 
   const handleMouseUp = useCallback(() => setIsDragging(false), []);
 
@@ -487,31 +596,49 @@ export default function CryptoPlanets() {
     
     if (!galaxyStateRef.current) return;
 
-    // Find if we clicked on a planet, moon, or sun
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
     // Convert screen coords to world coords
-    // Container is centered, so subtract half width/height to get container-relative coords
-    // Then subtract camera offset (in screen pixels) and divide by zoom
-    const containerX = e.clientX - rect.left - rect.width / 2;
-    const containerY = e.clientY - rect.top - rect.height / 2;
-    const worldX = (containerX - camera.x) / camera.zoom;
-    const worldY = (containerY - camera.y) / camera.zoom;
+    // The transform is: translate(camera.x, camera.y) scale(camera.zoom) with origin at center
+    // 
+    // To go from screen to world:
+    // 1. Get position relative to container center (where transform origin is)
+    // 2. Subtract camera translation (in screen pixels)
+    // 3. Divide by zoom to get world coordinates
+    //
+    // Note: World (0,0) corresponds to screen center when camera is at (0,0)
+    
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+    const screenX = e.clientX - rect.left - centerX;
+    const screenY = e.clientY - rect.top - centerY;
+    const worldX = (screenX - camera.x) / camera.zoom;
+    const worldY = (screenY - camera.y) / camera.zoom;
 
-    // Debug logging
-    console.log('Right-click debug:', {
-      click: { clientX: e.clientX, clientY: e.clientY },
-      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
-      container: { x: containerX, y: containerY },
-      camera: { x: camera.x, y: camera.y, zoom: camera.zoom },
-      world: { x: worldX, y: worldY },
-      sunPos: { x: galaxyStateRef.current.sunNode.x, y: galaxyStateRef.current.sunNode.y, r: galaxyStateRef.current.sunNode.radius },
-      planets: galaxyStateRef.current.planetNodes.map(p => ({ id: p.id, x: p.x, y: p.y, r: p.radius })),
+    // Debug: log what we're computing
+    console.log('=== Right-click debug ===');
+    console.log('Screen click:', { clientX: e.clientX, clientY: e.clientY });
+    console.log('Container rect:', { left: rect.left, top: rect.top, width: rect.width, height: rect.height });
+    console.log('Center:', { x: centerX, y: centerY });
+    console.log('Screen relative to center:', { x: screenX, y: screenY });
+    console.log('Camera:', { x: camera.x, y: camera.y, zoom: camera.zoom });
+    console.log('World coords:', { x: worldX, y: worldY });
+    console.log('Sun:', { 
+      x: galaxyStateRef.current.sunNode.x, 
+      y: galaxyStateRef.current.sunNode.y, 
+      r: galaxyStateRef.current.sunNode.radius 
     });
+    if (galaxyStateRef.current.planetNodes.length > 0) {
+      const p = galaxyStateRef.current.planetNodes[0];
+      console.log('First planet:', { id: p.id, x: p.x, y: p.y, r: p.radius, orbitR: p.orbitRadius });
+      // Also compute where this planet SHOULD appear on screen
+      const planetScreenX = p.x * camera.zoom + camera.x;
+      const planetScreenY = p.y * camera.zoom + camera.y;
+      console.log('First planet screen position (relative to center):', { x: planetScreenX, y: planetScreenY });
+    }
 
     // Check nodes in order: moons first (smallest), then planets, then sun
-    // This ensures smaller objects get priority over larger ones
     const allNodes = [
       ...galaxyStateRef.current.moonNodes,
       ...galaxyStateRef.current.planetNodes,
@@ -678,14 +805,42 @@ export default function CryptoPlanets() {
 
           {/* Prominent Following Indicator - Center Top */}
           {followingInfo && (
-            <div className="absolute top-6 left-1/2 -translate-x-1/2 bg-cyan-500/20 backdrop-blur-md rounded-full px-6 py-2 border border-cyan-400/50 flex items-center gap-3">
-              <span className="w-3 h-3 rounded-full bg-cyan-400 animate-pulse" />
-              <span className="text-cyan-300 font-semibold text-sm">
-                Following: {followingInfo.symbol}
+            <div className={`absolute top-6 left-1/2 -translate-x-1/2 backdrop-blur-md rounded-full px-6 py-2 border flex items-center gap-3 transition-all duration-300 ${
+              isTransitioning 
+                ? 'bg-purple-500/20 border-purple-400/50' 
+                : 'bg-cyan-500/20 border-cyan-400/50'
+            }`}>
+              <span className={`w-3 h-3 rounded-full animate-pulse ${
+                isTransitioning ? 'bg-purple-400' : 'bg-cyan-400'
+              }`} />
+              <span className={`font-semibold text-sm ${
+                isTransitioning ? 'text-purple-300' : 'text-cyan-300'
+              }`}>
+                {isTransitioning ? 'Navigating to: ' : 'Following: '}{followingInfo.symbol}
               </span>
+              
+              {/* Copy Link Button */}
+              <button
+                onClick={() => {
+                  navigator.clipboard.writeText(window.location.href);
+                  setLinkCopied(true);
+                  setTimeout(() => setLinkCopied(false), 2000);
+                }}
+                className="pointer-events-auto text-cyan-400/60 hover:text-green-400 transition-colors text-xs flex items-center gap-1"
+                title="Copy shareable link"
+              >
+                {linkCopied ? (
+                  <span className="text-green-400">Copied!</span>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+                  </svg>
+                )}
+              </button>
+              
               <button
                 onClick={() => handleFollowPlanet(null)}
-                className="pointer-events-auto text-cyan-400/60 hover:text-red-400 transition-colors ml-2 text-xs"
+                className="pointer-events-auto text-cyan-400/60 hover:text-red-400 transition-colors ml-1 text-xs"
                 title="Release follow"
               >
                 ✕
@@ -696,7 +851,19 @@ export default function CryptoPlanets() {
           <select
             className="pointer-events-auto bg-black/50 backdrop-blur-md border border-white/10 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-black/70 transition-colors"
             value={weightMode}
-            onChange={(e) => setWeightMode(e.target.value as WeightMode)}
+            onChange={(e) => {
+              const newMode = e.target.value as WeightMode;
+              setWeightMode(newMode);
+              
+              // Update URL with metric param
+              const url = new URL(window.location.href);
+              if (newMode !== 'MarketCap') {
+                url.searchParams.set('metric', newMode);
+              } else {
+                url.searchParams.delete('metric');
+              }
+              window.history.replaceState({}, '', url.toString());
+            }}
           >
             <option value="TVL">Size by TVL</option>
             <option value="MarketCap">Size by Market Cap</option>
@@ -708,14 +875,19 @@ export default function CryptoPlanets() {
         <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 max-w-xs ml-48">
           <div className="text-xs text-white/60 mb-2">Camera Controls</div>
           <div className="text-xs text-white/80 space-y-1">
-            <div>🖱️ Drag to pan {followingId && <span className="text-yellow-400">(releases lock)</span>}</div>
+            <div>🖱️ Drag to pan {(followingId || isTransitioning) && <span className="text-yellow-400">(cancels)</span>}</div>
             <div>🔍 Scroll to zoom</div>
-            <div>👆 Click chain in HUD to follow</div>
+            <div>👆 Click chain in HUD for cinematic travel</div>
             <div>🖱️ Right-click any object for menu</div>
           </div>
-          <div className="text-xs text-cyan-400 mt-2">
-            {followingInfo ? (
-              <span className="flex items-center gap-1">
+          <div className="text-xs mt-2">
+            {isTransitioning ? (
+              <span className="flex items-center gap-1 text-purple-400">
+                <span className="w-2 h-2 rounded-full bg-purple-400 animate-pulse" />
+                Swooshing to: {followingInfo?.symbol}
+              </span>
+            ) : followingInfo ? (
+              <span className="flex items-center gap-1 text-cyan-400">
                 <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
                 Following: {followingInfo.symbol} ({followingInfo.type})
               </span>
