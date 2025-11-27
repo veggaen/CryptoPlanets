@@ -4,8 +4,8 @@
 
 export const physicsConfig = {
     // ===== Orbital Motion (Deterministic) =====
-    baseChainAngularVel: 0.0003,    // Base angular velocity for chain orbits (radians/frame) - SLOWER for cosmic feel
-    baseTokenAngularVel: 0.0012,    // Tokens orbit faster than planets - REDUCED for stability
+    baseChainAngularVel: 0.0002,    // Base angular velocity for chain orbits (radians/frame)
+    baseTokenAngularVel: 0.0008,    // Moons orbit at comfortable visible speed
     orbitSpeedFalloff: 0.2,         // How much orbit speed decreases with distance
 
     // ===== Gravity & Physics (N-Body Lite) =====
@@ -54,13 +54,22 @@ export const physicsConfig = {
 
     // ===== Token/Moon Orbit ===== - 9x SCALE
     baseMoonOrbitRadius: 1080,      // Starting radius for moon belt from planet edge (px) - 9x FAR from planet
+    moonOrbitRadiusVariance: 800,   // Random variance in orbit radius (px) - creates messy field
+    moonOrbitEccentricity: 0.25,    // Max orbit eccentricity (0 = circle, 1 = very elliptical)
 
     // ===== Moon Ring System =====
-    moonSlotsPerRing: 6,            // Fewer slots = more spacing between moons
+    moonSlotsPerRing: 8,            // Slots per ring for moon distribution
     moonRingStep: 540,              // Distance between moon rings (px) - 9x spread
+    
+    // ===== Moon Physics (Asteroid Field) =====
+    moonGravitationalPull: 0.0008,  // How much moons pull on each other
+    moonOrbitCorrection: 0.002,     // Gentle pull back toward base orbit
+    moonMaxOrbitDeviation: 2000,    // Max distance from base orbit before strong pull back (px)
+    moonVelocityDamping: 0.995,     // Slight velocity decay per tick
+    moonAngleWobble: 0.15,          // Random wobble in orbit angle per tick
 
     // ===== Moons vs Meteorites =====
-    maxMoonsPerPlanet: 8,           // Fewer moons = less clutter
+    maxMoonsPerPlanet: 24,          // Max moons per planet - matches tokensPerChain in dataConfig
     maxMeteoritesPerPlanet: 8,      // Fewer meteorites
     moonMinRadius: 72,              // Minimum moon radius (px) - 9x
     moonMaxRadius: 450,             // Maximum moon radius (px) - 9x BIG moons

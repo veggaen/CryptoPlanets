@@ -80,6 +80,7 @@ export type GalaxyNode = {
     // Physics Properties
     weight: number;                // Used for calculations (TVL, market cap, etc.)
     mass: number;                  // For gravity calculations
+    orbitEccentricity?: number;    // Elliptical orbit eccentricity (0 = circle, higher = more elliptical)
     
     // Size comparison
     sizeRatio?: number;            // How many times larger than next entity (e.g., 4.98 means "4.98x larger")

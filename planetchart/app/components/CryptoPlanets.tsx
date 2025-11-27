@@ -10,6 +10,7 @@ import {
 import { loadGalaxyData } from "@/services/dataLoader";
 import { initGalaxyState, tickGalaxy } from "@/physics/galaxyEngine";
 import { CAMERA_CONFIG, updateFollowCamera, calculateIdealZoom, createCinematicTransition, updateCinematicTransition, CameraTransition } from "@/physics/cameraEngine";
+import { getParticles, getShakeOffset, Particle } from "@/physics/collision";
 import { uiConfig } from "@/config/uiConfig";
 import Starfield from "./Starfield";
 import Footer from "./Footer";
@@ -405,6 +406,74 @@ const OrbitRing = memo(({ radius }: { radius: number }) => (
 
 OrbitRing.displayName = 'OrbitRing';
 
+// --- Particle Layer for collision effects ---
+const ParticleLayer = memo(({ particles }: { particles: readonly Particle[] }) => (
+  <>
+    {particles.map((p, i) => {
+      // Different rendering based on particle type
+      if (p.type === 'spark') {
+        return (
+          <div
+            key={`spark-${i}`}
+            style={{
+              position: 'absolute',
+              left: p.x,
+              top: p.y,
+              width: p.size,
+              height: p.size,
+              borderRadius: '50%',
+              backgroundColor: p.color,
+              opacity: p.alpha,
+              boxShadow: `0 0 ${p.size * 2}px ${p.color}`,
+              transform: 'translate(-50%, -50%)',
+              pointerEvents: 'none',
+            }}
+          />
+        );
+      } else if (p.type === 'smoke') {
+        return (
+          <div
+            key={`smoke-${i}`}
+            style={{
+              position: 'absolute',
+              left: p.x,
+              top: p.y,
+              width: p.size,
+              height: p.size,
+              borderRadius: '50%',
+              background: `radial-gradient(circle, ${p.color}${Math.round(p.alpha * 80).toString(16).padStart(2, '0')} 0%, transparent 70%)`,
+              transform: 'translate(-50%, -50%)',
+              pointerEvents: 'none',
+            }}
+          />
+        );
+      } else {
+        // debris - trail effect
+        return (
+          <div
+            key={`debris-${i}`}
+            style={{
+              position: 'absolute',
+              left: p.x,
+              top: p.y,
+              width: p.size,
+              height: p.size * 0.5,
+              borderRadius: '50%',
+              backgroundColor: p.color,
+              opacity: p.alpha,
+              boxShadow: `0 0 ${p.size}px ${p.color}, ${-p.vx * 0.02}px ${-p.vy * 0.02}px ${p.size * 3}px ${p.color}40`,
+              transform: `translate(-50%, -50%) rotate(${Math.atan2(p.vy, p.vx)}rad)`,
+              pointerEvents: 'none',
+            }}
+          />
+        );
+      }
+    })}
+  </>
+));
+
+ParticleLayer.displayName = 'ParticleLayer';
+
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
@@ -422,6 +491,10 @@ export default function CryptoPlanets() {
   const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 0.05 });
   const [isLoading, setIsLoading] = useState(true);
   const [linkCopied, setLinkCopied] = useState(false);
+  
+  // Token filter state (default: hide stablecoins and wrapped)
+  const [hideStables, setHideStables] = useState(true);
+  const [hideWrapped, setHideWrapped] = useState(true);
   
   // Camera follow state
   const [followingId, setFollowingId] = useState<string | null>(null);
@@ -462,8 +535,9 @@ export default function CryptoPlanets() {
     const followParam = searchParams.get('follow');
     const metricParam = searchParams.get('metric');
     
-    if (followParam && !initialUrlProcessed.current) {
-      pendingFollowId.current = followParam.toLowerCase();
+    if (!initialUrlProcessed.current) {
+      // Default to BTC if no follow param specified
+      pendingFollowId.current = followParam ? followParam.toLowerCase() : 'btc';
     }
     
     if (metricParam && ['TVL', 'MarketCap', 'Volume24h', 'Change24h'].includes(metricParam)) {
@@ -476,7 +550,7 @@ export default function CryptoPlanets() {
     async function init() {
       setIsLoading(true);
       try {
-        const data = await loadGalaxyData(weightMode);
+        const data = await loadGalaxyData(weightMode, { hideStables, hideWrapped });
         const initialState = initGalaxyState(data);
 
         // Start zoomed out to see entire galaxy
@@ -492,7 +566,7 @@ export default function CryptoPlanets() {
       }
     }
     init();
-  }, [weightMode]);
+  }, [weightMode, hideStables, hideWrapped]);
   
   // Process pending follow from URL after galaxy is loaded
   useEffect(() => {
@@ -829,11 +903,11 @@ export default function CryptoPlanets() {
     >
       <Starfield />
 
-      {/* Galaxy container */}
+      {/* Galaxy container with camera shake */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
-          transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`,
+          transform: `translate(${camera.x + getShakeOffset().x}px, ${camera.y + getShakeOffset().y}px) scale(${camera.zoom})`,
           transformOrigin: 'center center',
         }}
       >
@@ -873,6 +947,9 @@ export default function CryptoPlanets() {
               node={node}
             />
           ))}
+
+          {/* Collision particle effects */}
+          <ParticleLayer particles={getParticles()} />
         </div>
       </div>
 
@@ -965,11 +1042,37 @@ export default function CryptoPlanets() {
               window.history.replaceState({}, '', url.toString());
             }}
           >
-            <option value="TVL">Size by TVL</option>
+            <option value="TVL"> TVL</option>
             <option value="MarketCap">Size by Market Cap</option>
             <option value="Volume24h">Size by 24h Volume</option>
-            <option value="Change24h">Size by 24h Change</option>
+            <option value="Change4h">Size by 4h Change</option>
           </select>
+          
+          {/* Token Filter Toggles */}
+          <div className="flex gap-2 pointer-events-auto">
+            <button
+              onClick={() => setHideStables(!hideStables)}
+              className={`px-3 py-2 rounded-lg text-xs font-medium transition-all backdrop-blur-md border ${
+                hideStables 
+                  ? 'bg-red-500/20 border-red-400/30 text-red-300' 
+                  : 'bg-green-500/20 border-green-400/30 text-green-300'
+              }`}
+              title={hideStables ? "Stablecoins hidden - click to show" : "Stablecoins visible - click to hide"}
+            >
+              {hideStables ? '🚫' : '✅'} Stables
+            </button>
+            <button
+              onClick={() => setHideWrapped(!hideWrapped)}
+              className={`px-3 py-2 rounded-lg text-xs font-medium transition-all backdrop-blur-md border ${
+                hideWrapped 
+                  ? 'bg-red-500/20 border-red-400/30 text-red-300' 
+                  : 'bg-green-500/20 border-green-400/30 text-green-300'
+              }`}
+              title={hideWrapped ? "Wrapped tokens hidden - click to show" : "Wrapped tokens visible - click to hide"}
+            >
+              {hideWrapped ? '🚫' : '✅'} Wrapped
+            </button>
+          </div>
         </div>
 
         <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 max-w-xs ml-48">

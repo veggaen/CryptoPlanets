@@ -1,9 +1,10 @@
 // Phase 2: Physics Engine (Refined)
-// Deterministic orbital mechanics with ring layouts, nested orbits, and scoped collisions
+// Deterministic orbital mechanics with ring layouts, nested orbits, and HARD collisions
 
 import type { GalaxyData, GalaxyState, GalaxyNode, ChainData, BTCData, WeightMode } from "@/types/galaxy";
 import { physicsConfig } from "@/config/physicsConfig";
 import { debugLog } from "@/utils/debug";
+import { resolveAllCollisions, updateParticles, decayCollisionGlow, updateFlungMoons, isMoonFlung } from "./collision";
 
 // Store base orbit radii for moons (to decay back to after collision push)
 const baseOrbitRadii = new Map<string, number>();
@@ -117,21 +118,22 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
 
             const createdMoons: GalaxyNode[] = [];
 
-            // 1. Create MOONS (Ring Layout)
+            // 1. Create MOONS (Chaotic Asteroid Field Layout)
             moons.forEach((token, tIndex) => {
-                // Ring Layout Calculation
+                // Base ring calculation (looser than before)
                 const ringIndex = Math.floor(tIndex / physicsConfig.moonSlotsPerRing);
                 const slotIndex = tIndex % physicsConfig.moonSlotsPerRing;
 
-                // Radius increases with ring index
+                // Radius with LARGE random variance for asteroid field feel
                 const ringBaseRadius = planetRadius + physicsConfig.baseMoonOrbitRadius + (ringIndex * physicsConfig.moonRingStep);
-                // Add some random variance to orbit radius so rings aren't perfect circles
-                const moonOrbitRadius = ringBaseRadius + (Math.random() * 10 - 5);
+                const radiusVariance = (physicsConfig.moonOrbitRadiusVariance || 800);
+                const moonOrbitRadius = ringBaseRadius + (Math.random() * radiusVariance * 2 - radiusVariance);
 
-                // Angle based on slot + random offset + planet stagger (breaks synchronization)
-                const angleStep = (Math.PI * 2) / physicsConfig.moonSlotsPerRing;
-                const planetPhaseOffset = index * 0.137; // Golden angle offset per planet
-                const moonAngle = (slotIndex * angleStep) + (Math.random() * 0.5 - 0.25) + planetPhaseOffset;
+                // Random starting angle (completely random, no slots)
+                const moonAngle = Math.random() * Math.PI * 2;
+                
+                // Random eccentricity for elliptical orbits
+                const eccentricity = Math.random() * (physicsConfig.moonOrbitEccentricity || 0.25);
 
                 const moonX = x + Math.cos(moonAngle) * moonOrbitRadius;
                 const moonY = y + Math.sin(moonAngle) * moonOrbitRadius;
@@ -171,22 +173,23 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
                 
                 // Store base orbit radius for decay
                 baseOrbitRadii.set(moonId, moonOrbitRadius);
-
+                
                 const moonNode: GalaxyNode = {
                     id: moonId,
                     type: 'moon',
                     parentId: chain.id,
                     x: moonX,
                     y: moonY,
-                    vx: (Math.random() - 0.5) * 0.5 + (index * 0.01), // Better randomization per planet
-                    vy: (Math.random() - 0.5) * 0.5 + (tIndex * 0.01),
+                    vx: 0, // No initial velocity - calm orbits
+                    vy: 0,
                     radius,
                     color: token.color || '#cbd5e1',
                     orbitRadius: moonOrbitRadius,
                     orbitAngle: moonAngle,
-                    angularVelocity: physicsConfig.baseTokenAngularVel * (Math.random() * 0.8 + 0.6) * (ringIndex % 2 === 0 ? 1 : -1), // INCREASED variance (was 0.5 + 0.8)
+                    angularVelocity: physicsConfig.baseTokenAngularVel * (0.8 + Math.random() * 0.4) * (Math.random() > 0.5 ? 1 : -1), // Slight speed variance, random direction
                     weight: token.marketCap,
-                    mass: 10,
+                    mass: 10 + Math.random() * 10, // Slight mass variance
+                    orbitEccentricity: eccentricity, // Store for elliptical orbit
                     data: token as any,
                     isDragging: false,
                     isSelected: false,
@@ -316,17 +319,20 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
 
 /**
  * Advance physics simulation by one tick
- * Moons/meteorites use deterministic orbits, planets use velocity physics
+ * Moons use DETERMINISTIC orbits with gentle wobble for variety
+ * NOT full velocity physics - just calm orbiting with slight variations
  */
 export function tickGalaxy(state: GalaxyState, dt: number): void {
     const { nodes } = state;
 
-    const planets = nodes.filter(n => n.type === 'planet');
-    const moons = nodes.filter(n => n.type === 'moon');
-
     for (const node of nodes) {
         if (node.type === 'sun') {
             resetNodePhysics(node);
+            continue;
+        }
+        
+        // Skip flung moons - they're handled by updateFlungMoons
+        if (isMoonFlung(node.id)) {
             continue;
         }
 
@@ -351,110 +357,81 @@ export function tickGalaxy(state: GalaxyState, dt: number): void {
             }
         }
 
-        // --- Step 3: Decay orbit radius back to base ---
-        const baseRadius = baseOrbitRadii.get(node.id);
-        if (baseRadius !== undefined && node.orbitRadius > baseRadius) {
-            // Slowly decay back to base orbit (0.5% per tick)
-            node.orbitRadius = node.orbitRadius * 0.995 + baseRadius * 0.005;
-        }
-
-        // --- Step 4: Calculate ideal position and set it ---
-        const idealX = centerX + Math.cos(node.orbitAngle) * node.orbitRadius;
-        const idealY = centerY + Math.sin(node.orbitAngle) * node.orbitRadius;
-
-        if (node.type === 'moon' || node.type === 'meteorite') {
-            // Deterministic: directly set position
-            node.x = idealX;
-            node.y = idealY;
-            node.vx = 0;
-            node.vy = 0;
-        } else if (node.type === 'planet') {
-            // Planets: Use deterministic orbits like moons for stability
-            // The gravity/velocity system was causing drift over time
-            // Just set position directly based on orbit angle and radius
-            node.x = idealX;
-            node.y = idealY;
-            node.vx = 0;
-            node.vy = 0;
-        }
-
-        // --- Step 5: Collision detection (moon vs moon, moon vs planet) ---
+        // --- Step 3: Calculate ideal orbital position ---
+        const baseRadius = baseOrbitRadii.get(node.id) || node.orbitRadius;
+        let effectiveRadius = node.orbitRadius;
+        
         if (node.type === 'moon') {
-            // Moon vs other moons (same parent = stronger push)
-            moons.forEach(other => {
-                if (node.id !== other.id) {
-                    const sameParent = node.parentId === other.parentId;
-                    applyMoonCollision(node, other, sameParent ? 1.5 : 0.3);
+            const eccentricity = node.orbitEccentricity || 0;
+            effectiveRadius = node.orbitRadius * (1 + eccentricity * Math.cos(node.orbitAngle));
+        }
+        
+        const idealX = centerX + Math.cos(node.orbitAngle) * effectiveRadius;
+        const idealY = centerY + Math.sin(node.orbitAngle) * effectiveRadius;
+
+        // --- Step 4: Handle moon physics (velocity-based when hit, orbital otherwise) ---
+        if (node.type === 'moon') {
+            // Check if moon has significant velocity from collision
+            const speed = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
+            
+            if (speed > 0.5) {
+                // Moon was hit! Use velocity-based movement
+                node.x += node.vx * dt * 60;
+                node.y += node.vy * dt * 60;
+                
+                // Gradually decay velocity (friction)
+                node.vx *= 0.985;
+                node.vy *= 0.985;
+                
+                // Gentle pull back toward orbit (gravity-like)
+                const pullStrength = 0.002;
+                node.vx += (idealX - node.x) * pullStrength;
+                node.vy += (idealY - node.y) * pullStrength;
+                
+                // Update orbit angle to match actual position (so orbit continues from here)
+                node.orbitAngle = Math.atan2(node.y - centerY, node.x - centerX);
+                node.orbitRadius = Math.sqrt((node.x - centerX) ** 2 + (node.y - centerY) ** 2);
+                
+                // Slowly decay orbit radius back to base
+                if (Math.abs(node.orbitRadius - baseRadius) > 10) {
+                    node.orbitRadius = node.orbitRadius * 0.998 + baseRadius * 0.002;
                 }
-            });
-
-            // Moon vs parent planet (push outward)
-            if (parentNode) {
-                applyMoonCollision(node, parentNode, 2.0);
+            } else {
+                // Normal calm orbital motion
+                node.x = idealX;
+                node.y = idealY;
+                node.vx = 0;
+                node.vy = 0;
+                
+                // Decay orbit radius back to base
+                if (Math.abs(node.orbitRadius - baseRadius) > 5) {
+                    node.orbitRadius = node.orbitRadius * 0.995 + baseRadius * 0.005;
+                }
             }
+        } else {
+            // Planets and meteorites: deterministic orbits
+            node.x = idealX;
+            node.y = idealY;
         }
-
-        // --- Step 6: Velocity physics only needed for future non-deterministic bodies ---
-        // Planets are now deterministic, so this block is a fallback
-        if (node.type !== 'planet' && node.type !== 'moon' && node.type !== 'meteorite' && node.type !== 'sun') {
-            node.vx *= physicsConfig.friction;
-            node.vy *= physicsConfig.friction;
-
-            const vSq = node.vx * node.vx + node.vy * node.vy;
-            if (vSq > physicsConfig.maxVelocity * physicsConfig.maxVelocity) {
-                const v = Math.sqrt(vSq);
-                node.vx = (node.vx / v) * physicsConfig.maxVelocity;
-                node.vy = (node.vy / v) * physicsConfig.maxVelocity;
-            }
-
-            node.x += node.vx * dt;
-            node.y += node.vy * dt;
-
-            // Bounds check
-            const distFromCenter = Math.sqrt(node.x * node.x + node.y * node.y);
-            if (distFromCenter > physicsConfig.galaxyBounds) {
-                const nx = node.x / distFromCenter;
-                const ny = node.y / distFromCenter;
-                node.x = nx * physicsConfig.galaxyBounds;
-                node.y = ny * physicsConfig.galaxyBounds;
-            }
-        }
-
-        // Decay visuals
-        decayVisuals(node);
     }
+    
+    // --- Step 5: Update flung moons (supernova ejection physics) ---
+    updateFlungMoons(nodes, dt);
+    
+    // --- Step 6: HARD collision detection for all pairs ---
+    // Collisions give moons velocity, which makes them deviate from orbit
+    resolveAllCollisions(nodes, (nodeId) => baseOrbitRadii.get(nodeId));
+    
+    // --- Step 7: Update particle effects ---
+    updateParticles(dt);
+    
+    // --- Step 8: Decay collision glow ---
+    decayCollisionGlow(nodes);
 }
 
-/**
- * Apply collision between moons - pushes orbit radius outward temporarily
- */
+// Legacy function - kept for compatibility but now uses new system
 function applyMoonCollision(node: GalaxyNode, other: GalaxyNode, strength: number) {
-    const dx = node.x - other.x;
-    const dy = node.y - other.y;
-    const dist = Math.sqrt(dx * dx + dy * dy) || 0.001;
-
-    const sumRadii = node.radius + other.radius;
-    const minDist = sumRadii + physicsConfig.collidePadding;
-
-    if (dist < minDist) {
-        const overlap = minDist - dist;
-        
-        // Push orbit radius outward (will decay back)
-        const pushAmount = overlap * 0.15 * strength;
-        node.orbitRadius += pushAmount;
-        
-        // Cap max orbit expansion to 50% above base
-        const baseRadius = baseOrbitRadii.get(node.id);
-        if (baseRadius !== undefined) {
-            const maxOrbit = baseRadius * 1.5;
-            if (node.orbitRadius > maxOrbit) {
-                node.orbitRadius = maxOrbit;
-            }
-        }
-
-        // Trigger glow
-        node.collisionGlow = Math.min(1.0, (node.collisionGlow || 0) + 0.5);
-    }
+    // This is now handled by resolveAllCollisions
 }
 
 // --- Helpers ---
@@ -541,4 +518,11 @@ export function calculateMoonRadius(marketCap: number): number {
 
 export function getNodeById(state: GalaxyState, id: string): GalaxyNode | undefined {
     return state.nodes.find(n => n.id === id);
+}
+
+/**
+ * Get the base orbit radius for a moon (used for supernova return)
+ */
+export function getBaseOrbitRadius(nodeId: string): number | undefined {
+    return baseOrbitRadii.get(nodeId);
 }

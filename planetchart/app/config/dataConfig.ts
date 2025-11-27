@@ -4,68 +4,90 @@
 // ===== CURATED CHAIN TOKENS =====
 // These are the canonical HOME chains for each token
 // CoinGecko IDs - tokens only appear as moons on their native chain
+// Priority order: most important tokens first (HEX always first for ETH/PLS)
 export const CHAIN_TOKENS: Record<string, string[]> = {
-    // Ethereum - ETH-native DeFi and meme tokens
+    // Bitcoin - Ordinals ecosystem (BRC-20)
+    bitcoin: [
+        "ordi",             // ORDI - first BRC-20
+        "sats-ordinals",    // SATS - satoshi fractions
+    ],
+    
+    // Ethereum - ETH-native DeFi, Memes, and Core tokens
     ethereum: [
-        "hex",              // HEX - launched on ETH (CoinGecko has broken MC, we use DexScreener)
+        "hex",              // HEX - launched on ETH (0x2b591e99afe9f32eaa6214f7b7629768c40eeb39)
+        "wise-token11",     // WISE (0x66a0f676479Cee1d7373f3DC2e2952778BfF5bd6)
+        // Core DeFi
         "uniswap",          // UNI
-        "chainlink",        // LINK
         "aave",             // AAVE
         "lido-dao",         // LDO
         "maker",            // MKR
+        "chainlink",        // LINK
+        "frax-share",       // FXS (governance token, not FRAX stablecoin)
+        // Meme tokens
         "shiba-inu",        // SHIB
         "pepe",             // PEPE
+        "floki",            // FLOKI
+        // Other notable ETH tokens
+        "decentraland",     // MANA
+        "chiliz",           // CHZ
+        "gnosis",           // GNO
         "the-graph",        // GRT
-        "ens",              // ENS
+        "ethereum-name-service", // ENS
         "pendle",           // PENDLE
         "curve-dao-token",  // CRV
-        "1inch",            // 1INCH
-        "synthetix-network-token", // SNX
-        "compound-governance-token", // COMP
     ],
     
     // Solana - SPL tokens native to Solana
     solana: [
         "jupiter-exchange-solana", // JUP
-        "raydium",          // RAY
+        "jito-staked-sol",  // JitoSOL (liquid staking)
         "bonk",             // BONK
         "dogwifcoin",       // WIF
+        "popcat",           // POPCAT
+        "raydium",          // RAY
         "jito-governance-token", // JTO
         "pyth-network",     // PYTH
-        "render-token",     // RNDR (was ETH, migrated to SOL)
+        "render-token",     // RNDR (migrated to SOL)
         "helium",           // HNT
-        "marinade",         // MNDE
+        "marinade",         // MNDE / mSOL
         "orca",             // ORCA
         "official-trump",   // TRUMP
         "book-of-meme",     // BOME
-        "popcat",           // POPCAT
         "cat-in-a-dogs-world", // MEW
     ],
     
-    // BNB Chain (BSC) - BEP-20 tokens native to BSC
+    // BNB Chain (BSC) - BEP-20 tokens
     bnb: [
         "pancakeswap-token", // CAKE
         "trust-wallet-token", // TWT
-        "venus",            // XVS
+        "floki",            // FLOKI (multi-chain but big on BSC)
         "baby-doge-coin",   // BABYDOGE
-        "safemoon-2",       // SAFEMOON
-        "floki",            // FLOKI
-        "bake",             // BAKE
+        "venus",            // XVS
+        "bakerytoken",      // BAKE (BakerySwap)
         "alpaca-finance",   // ALPACA
         "biswap",           // BSW
         "coin98",           // C98
     ],
     
-    // Polygon - MATIC ecosystem tokens
-    polygon: [
-        "quickswap",        // QUICK
+    // Base - Coinbase L2
+    base: [
+        "aerodrome-finance", // AERO
+        "brett",            // BRETT (Base meme)
+        "toshi",            // TOSHI (Base cat meme, rank #297)
+        "degen-base",       // DEGEN
+        "virtual-protocol", // VIRTUAL
+        "extra-finance",    // EXTRA
+    ],
+    
+    // Arbitrum - ARB ecosystem
+    arbitrum: [
+        "gmx",              // GMX
+        "magic",            // MAGIC (Treasure DAO)
+        "pendle",           // PENDLE (multi-chain, big on ARB)
         "gains-network",    // GNS
-        "polymath",         // POLY
-        "balancer",         // BAL (multi-chain but strong on Polygon)
-        "ocean-protocol",   // OCEAN
-        "tellor",           // TRB
-        "mask-network",     // MASK
-        "sushi",            // SUSHI (multi-chain)
+        "radiant-capital",  // RDNT
+        "camelot-token",    // GRAIL
+        "dopex",            // DPX
     ],
     
     // Avalanche - AVAX ecosystem
@@ -75,68 +97,84 @@ export const CHAIN_TOKENS: Record<string, string[]> = {
         "pangolin",         // PNG
         "platypus-finance", // PTP
         "vector-finance",   // VTX
-        "gmx",              // GMX (also on Arbitrum)
     ],
     
-    // Arbitrum - ARB ecosystem
-    arbitrum: [
-        "arbitrum",         // ARB (the chain token itself, shown as moon?)
-        "gmx",              // GMX
-        "magic",            // MAGIC (Treasure DAO)
-        "radiant-capital",  // RDNT
-        "camelot-token",    // GRAIL
-        "pendle",           // PENDLE (multi-chain, big on ARB)
-        "dopex",            // DPX
-    ],
-    
-    // Base - Coinbase L2
-    base: [
-        "aerodrome-finance", // AERO
-        "degen-base",       // DEGEN
-        "brett",            // BRETT (Base meme)
-        "toshi-base",       // TOSHI
-        "friend-tech",      // FRIEND
-        "virtual-protocol", // VIRTUAL
-        "extra-finance",    // EXTRA
-    ],
-    
-    // Optimism - OP ecosystem
-    optimism: [
-        "optimism",         // OP
-        "velodrome-finance", // VELO
-        "synthetix-network-token", // SNX (big on OP)
-        "thales",           // THALES
-        "extra-finance",    // EXTRA
+    // Polygon - POL/MATIC ecosystem
+    polygon: [
+        "aave",             // AAVE (multi-chain but strong on Polygon)
+        "uniswap",          // UNI (multi-chain)
+        "the-sandbox",      // SAND
+        "gains-network",    // GNS
+        "aavegotchi",       // GHST
+        "quickswap",        // QUICK
+        "balancer",         // BAL
+        "sushi",            // SUSHI
     ],
     
     // PulseChain - Richard Heart ecosystem
     pulsechain: [
         "hex-pulsechain",   // pHEX (separate from eHEX!)
         "pulsex",           // PLSX
+        "pulsex-incentive-token", // INC
         "hedron",           // HDRN
-        "incentive",        // INC
-        "phiat",            // PHIAT
+        "phiat-protocol",   // PHIAT
         "liquid-loans",     // LOAN
-        "pulsedogecoin",    // PLSD
-    ],
-    
-    // Fantom - FTM ecosystem
-    fantom: [
-        "spookyswap",       // BOO
-        "spiritswap",       // SPIRIT
-        "beefy-finance",    // BIFI
-        "geist-finance",    // GEIST
-        "tomb",             // TOMB
-        "fantom-usd",       // FUSD (exception: native stable)
+        // PLSD (PulseDogecoin) not on CoinGecko - needs DexScreener
     ],
     
     // Cronos - CRO ecosystem  
     cronos: [
         "vvs-finance",      // VVS
-        "ferro",            // FER
         "tectonic",         // TONIC
-        "single-finance",   // SINGLE
+        "ferro",            // FER
+        "mmfinance",        // MMF (correct CoinGecko ID)
     ],
+    
+    // Fantom - FTM ecosystem
+    fantom: [
+        "spookyswap",       // BOO
+        "beets",            // BEETS (Beethoven-X)
+        "beefy-finance",    // BIFI
+        // spiritswap and geist-finance are delisted from CoinGecko
+    ],
+    
+    // Optimism - OP ecosystem
+    optimism: [
+        "velodrome-finance", // VELO
+        "synthetix-network-token", // SNX (big on OP)
+        "thales",           // THALES
+        "extra-finance",    // EXTRA
+    ],
+};
+
+// ===== DEXSCREENER TOKENS BY CHAIN =====
+// Tokens fetched from DexScreener (not on CoinGecko or need better data)
+// Format: { symbol, name, address (contract address) }
+export const DEXSCREENER_TOKENS: Record<string, { symbol: string, name: string, address: string }[]> = {
+    pulsechain: [
+        // PulseChain native tokens not on CoinGecko
+        { symbol: "TEDDY", name: "Teddy Bear", address: "0xd6c31bA0754C4383A41c0e9DF042C62b5e918f6d" },
+        { symbol: "PLSD", name: "PulseDogecoin", address: "0x34F0915a5f15a66Eba86F6a58bE1A471Fb7836A7" },
+        { symbol: "PCOCK", name: "PulseChain Peacock", address: "0xc10A4Ed9b4042222d69ff0B374eddd47ed90fC1F" },
+        { symbol: "pTGC", name: "The Grays Currency", address: "0x94534EeEe131840b1c0F61847c572228bdfDDE93" },
+        { symbol: "UFO", name: "UFO", address: "0x456548A9B56eFBbD89Ca0309edd17a9E20b04018" },
+        { symbol: "ANON", name: "PulseChain Anonymous", address: "0x2a27453e460aAa2f19BFBA356547c2CeaB123A1e" },
+        { symbol: "PHEN", name: "PulseChain Peahen", address: "0xFDe3255Fb043eA55F9D8635C5e7FF18770A6a810" },
+        { symbol: "PTIGER", name: "PulseChain Tiger", address: "0xC2ACde27428d292C4E8e5A4A38148d6b7A2215f5" },
+        { symbol: "9MM", name: "9MM", address: "0x7b39712Ef45F7dcED2bBDF11F3D5046bA61dA719" },
+        { symbol: "JOY", name: "The Joy of PulseChain", address: "0xD26Ac11FE213cb0916c63A70293f7b0Df91a2de4" },
+        { symbol: "MOST", name: "MostWanted", address: "0xe33a5AE21F93aceC5CfC0b7b0FDBB65A0f0Be5cC" },
+    ],
+    fantom: [
+        // Fantom tokens delisted from CoinGecko
+        { symbol: "SPIRIT", name: "SpiritSwap", address: "0x5Cc61A78F164885776AA610fb0FE1257df78E59B" },
+        { symbol: "GEIST", name: "Geist Finance", address: "0xd8321AA83Fb0a4ECd6348D4577431310A6E0814d" },
+    ],
+    // Can add other chains supported by DexScreener:
+    // sui: [...],
+    // ton: [...],
+    // xrp: [...], - Note: XRP Ledger may need different API
+    // cardano: [...], - Note: Cardano may need different API
 };
 
 // Symbols that should NEVER be moons (they are planets/L1s)
@@ -144,25 +182,42 @@ export const CHAIN_NATIVE_SYMBOLS = new Set([
     "BTC", "ETH", "BNB", "SOL", "AVAX", "MATIC", "POL", "FTM", 
     "CRO", "PLS", "TRX", "XRP", "ADA", "DOT", "ATOM", "NEAR",
     "APT", "SUI", "TON", "XLM", "ALGO", "HBAR", "ICP", "FIL",
-    "ETC", "BCH", "LTC", "XMR", "DOGE"
+    "ETC", "BCH", "LTC", "XMR", "DOGE", "ARB", "OP"
 ]);
 
-// Stablecoin symbols - filter these out
+// Stablecoin symbols - filterable via UI toggle
 export const STABLECOIN_SYMBOLS = new Set([
     "USDT", "USDC", "DAI", "TUSD", "FRAX", "LUSD", "USDD", "USDN", 
     "GUSD", "BUSD", "USDS", "USDL", "USDP", "PYUSD", "FDUSD", "CRVUSD",
     "SUSD", "MIM", "DOLA", "EUSD", "CUSD", "UST", "HUSD", "SUSDE", "USDE",
-    "RAI", "USDJ", "FLEXUSD", "EURS", "EURT", "FUSD"
+    "RAI", "USDJ", "FLEXUSD", "EURS", "EURT", "FUSD", "USDD", "USDX",
+    "XUSD", "MUSD", "HAY", "FRAX", "ALUSD", "GHO", "CRVUSD"
 ]);
 
-// Wrapped/derivative token patterns - filter these out
+// Wrapped/derivative token patterns - filterable via UI toggle
 export const WRAPPED_PATTERNS = new Set([
+    // Wrapped native tokens
     "WETH", "WBTC", "WBNB", "WMATIC", "WAVAX", "WFTM", "WSOL", "WPLS",
+    // ETH liquid staking derivatives  
     "STETH", "WSTETH", "CBETH", "RETH", "FRXETH", "SFRXETH", "METH", "SWETH",
-    "WBETH", "ANKRBNB", "SBNB", "BETH", "WEETH", "EZETH", "RSETH",
-    "BTCB", "RENBTC", "SBTC", "TBTC", "HBTC", "CBBTC", "SOLVBTC",
-    "MSOL", "JITOSOL", "BSOL", // Solana liquid staking
+    "WBETH", "ANKRBNB", "SBNB", "BETH", "WEETH", "EZETH", "RSETH", "OSETH",
+    // BTC wrapped variants
+    "BTCB", "RENBTC", "SBTC", "TBTC", "HBTC", "CBBTC", "SOLVBTC", "PBTC",
+    // Solana liquid staking (keep JITOSOL and MSOL as exceptions - they're important)
+    "BSOL", "SCNSOL", "JSOL", "STSOL", "LSOL",
+    // Other wrapped
+    "WPOL", "WCRO", "WFTM", "WONE", "WKCS", "WMOVR", "WGLMR"
 ]);
+
+// ===== FILTER DEFAULTS =====
+// These control whether stablecoins and wrapped tokens are shown
+// Users can toggle these in the UI
+export const DEFAULT_FILTERS = {
+    hideStablecoins: true,      // Hide stablecoins by default
+    hideWrappedTokens: true,    // Hide wrapped tokens by default
+    // Exception list - always show these even if they match wrapped patterns
+    wrappedExceptions: ["JITOSOL", "MSOL", "STETH"],  // Popular liquid staking shown
+};
 
 export const dataConfig = {
     // ===== Weight Modes =====

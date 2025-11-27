@@ -43,18 +43,29 @@ function isCacheUsable(entry: CacheEntry): boolean {
     return Date.now() - entry.timestamp < STALE_TTL_MS;
 }
 
+// ===== FILTER OPTIONS TYPE =====
+interface FilterOptions {
+    hideStables: boolean;
+    hideWrapped: boolean;
+}
+
 // ===== CORE DATA FETCHING (calls external APIs) =====
-async function fetchGalaxyDataFromAPIs(weightMode: WeightMode): Promise<GalaxyData> {
+async function fetchGalaxyDataFromAPIs(weightMode: WeightMode, filters: FilterOptions): Promise<GalaxyData> {
     // Import services dynamically to avoid circular dependencies
     const { fetchChainsTVL } = await import('@/services/defiLlama');
-    const { fetchHEXData } = await import('@/services/dexScreener');
+    const { fetchHEXData, fetchDexScreenerTokensByAddress } = await import('@/services/dexScreener');
     const { fetchBTCStats, fetchSpecificTokens, fetchCoinsPrices, fetchCoinIcons } = await import('@/services/coinGecko');
     const { getPulseChainData } = await import('@/services/pulseChain');
-    const { dataConfig, CHAIN_TOKENS, STABLECOIN_SYMBOLS, WRAPPED_PATTERNS, CHAIN_NATIVE_SYMBOLS } = await import('@/config/dataConfig');
+    const { dataConfig, CHAIN_TOKENS, DEXSCREENER_TOKENS, STABLECOIN_SYMBOLS, WRAPPED_PATTERNS, CHAIN_NATIVE_SYMBOLS, DEFAULT_FILTERS } = await import('@/config/dataConfig');
 
-    // Helper functions
+    // Helper functions (respect filter settings)
     const isStable = (symbol: string): boolean => STABLECOIN_SYMBOLS.has(symbol.toUpperCase());
-    const isWrapped = (symbol: string): boolean => WRAPPED_PATTERNS.has(symbol.toUpperCase());
+    const isWrapped = (symbol: string): boolean => {
+        const upperSymbol = symbol.toUpperCase();
+        // Check exceptions first (always show these liquid staking tokens)
+        if (DEFAULT_FILTERS.wrappedExceptions.includes(upperSymbol)) return false;
+        return WRAPPED_PATTERNS.has(upperSymbol);
+    };
     const isChainNative = (symbol: string): boolean => CHAIN_NATIVE_SYMBOLS.has(symbol.toUpperCase());
 
     const calculateWeight = (chain: ChainData, mode: WeightMode): number => {
@@ -137,12 +148,55 @@ async function fetchGalaxyDataFromAPIs(weightMode: WeightMode): Promise<GalaxyDa
     if (uniqueTokenIds.length > 0) {
         allTokens = await fetchSpecificTokens(uniqueTokenIds);
         console.log(`[API] Got ${allTokens.length} tokens from CoinGecko`);
+        
+        // Log which tokens were not found
+        const foundIds = new Set(allTokens.map(t => t.address));
+        const missingIds = uniqueTokenIds.filter(id => !foundIds.has(id));
+        if (missingIds.length > 0) {
+            console.log(`[API] ⚠️ Missing tokens (wrong CoinGecko ID?): ${missingIds.join(', ')}`);
+        }
     }
 
     // Create lookup map for tokens
     const tokenLookup = new Map(allTokens.map(t => [t.address, t])); // address = coingecko ID
 
-    // 5. Assign tokens to chains
+    // 5. Pre-fetch DexScreener tokens for all chains that need them
+    const dexTokensMap: Map<string, any[]> = new Map();
+    const dexChainIdMap: Record<string, string> = {
+        'pulsechain': 'pulsechain',
+        'fantom': 'fantom',
+        'ethereum': 'ethereum',
+        'bsc': 'bsc',
+        'arbitrum': 'arbitrum',
+        'polygon': 'polygon',
+        'base': 'base',
+        'avalanche': 'avalanche',
+        'solana': 'solana',
+        'sui': 'sui',
+        'ton': 'ton',
+    };
+
+    // Fetch DexScreener tokens in parallel for all chains that need them
+    const dexFetchPromises = weightedChains
+        .filter(chain => DEXSCREENER_TOKENS[chain.id] && DEXSCREENER_TOKENS[chain.id].length > 0)
+        .map(async (chain) => {
+            const dexChainId = dexChainIdMap[chain.id] || chain.id;
+            const dexTokenConfigs = DEXSCREENER_TOKENS[chain.id];
+            try {
+                const tokens = await fetchDexScreenerTokensByAddress(dexChainId, dexTokenConfigs);
+                return { chainId: chain.id, tokens };
+            } catch (error) {
+                console.warn(`[API] Failed to fetch DexScreener tokens for ${chain.id}:`, error);
+                return { chainId: chain.id, tokens: [] };
+            }
+        });
+
+    const dexResults = await Promise.all(dexFetchPromises);
+    for (const result of dexResults) {
+        dexTokensMap.set(result.chainId, result.tokens);
+    }
+
+    // 6. Assign tokens to chains
     const chainsWithTokens = weightedChains.map(chain => {
         const chainTokenIds = chainTokenMap.get(chain.id) || [];
         
@@ -150,13 +204,16 @@ async function fetchGalaxyDataFromAPIs(weightMode: WeightMode): Promise<GalaxyDa
             .map(id => tokenLookup.get(id))
             .filter((t): t is any => t !== undefined);
 
-        // Apply safety filters
+        // Apply safety filters based on filter options
         tokens = tokens.filter(t => {
             const symbol = (t.symbol || "").toUpperCase();
             if (!symbol) return false;
-            if (isStable(symbol)) return false;
-            if (isWrapped(symbol)) return false;
+            // Always filter chain natives (they are planets, not moons)
             if (isChainNative(symbol)) return false;
+            // Optionally filter stablecoins
+            if (filters.hideStables && isStable(symbol)) return false;
+            // Optionally filter wrapped tokens
+            if (filters.hideWrapped && isWrapped(symbol)) return false;
             return true;
         });
 
@@ -174,10 +231,40 @@ async function fetchGalaxyDataFromAPIs(weightMode: WeightMode): Promise<GalaxyDa
             tokens.unshift(hexData.pHEX);
         }
 
+        // Add pre-fetched DexScreener tokens for this chain
+        const dexTokens = dexTokensMap.get(chain.id) || [];
+        if (dexTokens.length > 0) {
+            // Filter DexScreener tokens by the same rules
+            const filteredDexTokens = dexTokens.filter(t => {
+                const symbol = (t.symbol || "").toUpperCase();
+                if (!symbol) return false;
+                if (isChainNative(symbol)) return false;
+                if (filters.hideStables && isStable(symbol)) return false;
+                if (filters.hideWrapped && isWrapped(symbol)) return false;
+                return true;
+            });
+            
+            // Add DexScreener tokens that aren't already in the list
+            const existingSymbols = new Set(tokens.map(t => (t.symbol || '').toUpperCase()));
+            for (const dexToken of filteredDexTokens) {
+                if (!existingSymbols.has((dexToken.symbol || '').toUpperCase())) {
+                    tokens.push(dexToken);
+                    existingSymbols.add((dexToken.symbol || '').toUpperCase());
+                }
+            }
+            
+            if (filteredDexTokens.length > 0) {
+                console.log(`[API] ${chain.id}: Added ${filteredDexTokens.length} DexScreener tokens (${filteredDexTokens.map(t => t.symbol).join(', ')})`);
+            }
+        }
+
+        // Log token count per chain
+        console.log(`[API] ${chain.id}: ${tokens.length} tokens (${tokens.map(t => t.symbol).join(', ')})`);
+
         return { ...chain, tokens };
     });
 
-    // 6. Calculate Dominance
+    // 7. Calculate Dominance
     btcData.dominance = (btcData.marketCap / totalVal) * 100;
     chainsWithTokens.forEach(c => {
         c.dominance = (c.tvl / totalVal) * 100;
@@ -201,7 +288,14 @@ async function fetchGalaxyDataFromAPIs(weightMode: WeightMode): Promise<GalaxyDa
 export async function GET(request: NextRequest) {
     const searchParams = request.nextUrl.searchParams;
     const weightMode = (searchParams.get('mode') || 'MarketCap') as WeightMode;
-    const cacheKey = `galaxy-${weightMode}`;
+    
+    // Filter params (default: hide stablecoins and wrapped tokens)
+    const hideStables = searchParams.get('hideStables') !== 'false';
+    const hideWrapped = searchParams.get('hideWrapped') !== 'false';
+    
+    // Create cache key that includes filter state
+    const cacheKey = `galaxy-${weightMode}-stables:${hideStables}-wrapped:${hideWrapped}`;
+    const filters: FilterOptions = { hideStables, hideWrapped };
 
     try {
         // Check cache first
@@ -222,7 +316,7 @@ export async function GET(request: NextRequest) {
         // Cache is stale or missing - need to fetch fresh data
         // Use lock to prevent multiple simultaneous API calls
         if (!fetchInProgress) {
-            fetchInProgress = fetchGalaxyDataFromAPIs(weightMode)
+            fetchInProgress = fetchGalaxyDataFromAPIs(weightMode, filters)
                 .finally(() => { fetchInProgress = null; });
         }
 

@@ -28,6 +28,31 @@ export function formatCompactUSD(value: number): string {
 }
 
 /**
+ * Format market cap with appropriate suffix (B, T)
+ * @param value - Market cap in USD
+ * @returns Formatted string (e.g., "$1.2T", "$850B")
+ */
+export function formatMarketCap(value: number): string {
+    if (value >= 1e12) return `$${(value / 1e12).toFixed(2)}T`;
+    if (value >= 1e9) return `$${(value / 1e9).toFixed(2)}B`;
+    if (value >= 1e6) return `$${(value / 1e6).toFixed(2)}M`;
+    if (value >= 1e3) return `$${(value / 1e3).toFixed(2)}K`;
+    return `$${value.toFixed(2)}`;
+}
+
+/**
+ * Format price with appropriate decimal places
+ * @param value - Price in USD
+ * @returns Formatted price string
+ */
+export function formatPriceWithDecimals(value: number): string {
+    if (value >= 1000) return value.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    if (value >= 1) return value.toFixed(2);
+    if (value >= 0.01) return value.toFixed(4);
+    return value.toPrecision(4);
+}
+
+/**
  * Get label for a weight mode metric
  * @param mode - The weight mode
  * @param value - The value for that metric

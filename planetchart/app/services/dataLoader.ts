@@ -14,9 +14,22 @@ import { debugLog } from "@/utils/debug";
 // ===== CLIENT-SIDE CONFIGURATION =====
 const API_TIMEOUT_MS = 15_000;    // Timeout for API requests
 
+// ===== FILTER OPTIONS =====
+export interface GalaxyFilterOptions {
+    hideStables?: boolean;    // Hide stablecoins (default: true)
+    hideWrapped?: boolean;    // Hide wrapped tokens (default: true)
+}
+
 // ===== MAIN DATA LOADER =====
-export async function loadGalaxyData(weightMode: WeightMode): Promise<GalaxyData> {
-    debugLog('data', `Loading galaxy data with weight mode: ${weightMode}`);
+export async function loadGalaxyData(
+    weightMode: WeightMode, 
+    filters: GalaxyFilterOptions = {}
+): Promise<GalaxyData> {
+    // Apply defaults
+    const hideStables = filters.hideStables !== false;
+    const hideWrapped = filters.hideWrapped !== false;
+    
+    debugLog('data', `Loading galaxy data with weight mode: ${weightMode}, hideStables: ${hideStables}, hideWrapped: ${hideWrapped}`);
 
     try {
         // Determine the API URL (works both client and server side)
@@ -24,7 +37,7 @@ export async function loadGalaxyData(weightMode: WeightMode): Promise<GalaxyData
             ? '' // Client-side: relative URL
             : (process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'); // Server-side
         
-        const url = `${baseUrl}/api/galaxy?mode=${encodeURIComponent(weightMode)}`;
+        const url = `${baseUrl}/api/galaxy?mode=${encodeURIComponent(weightMode)}&hideStables=${hideStables}&hideWrapped=${hideWrapped}`;
         
         debugLog('data', `Fetching from internal API: ${url}`);
 
