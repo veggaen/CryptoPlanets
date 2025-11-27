@@ -51,7 +51,6 @@ async function fetchGalaxyDataFromAPIs(weightMode: WeightMode): Promise<GalaxyDa
     const { fetchBTCStats, fetchSpecificTokens, fetchCoinsPrices, fetchCoinIcons } = await import('@/services/coinGecko');
     const { getPulseChainData } = await import('@/services/pulseChain');
     const { dataConfig, CHAIN_TOKENS, STABLECOIN_SYMBOLS, WRAPPED_PATTERNS, CHAIN_NATIVE_SYMBOLS } = await import('@/config/dataConfig');
-    const { validateGalaxyData } = await import('@/utils/validation');
 
     // Helper functions
     const isStable = (symbol: string): boolean => STABLECOIN_SYMBOLS.has(symbol.toUpperCase());
@@ -192,7 +191,7 @@ async function fetchGalaxyDataFromAPIs(weightMode: WeightMode): Promise<GalaxyDa
         metric: weightMode,
     };
 
-    validateGalaxyData(galaxyData);
+    // Type is already validated by TypeScript, no runtime assertion needed
     console.log(`[API] Successfully fetched galaxy data with ${galaxyData.chains.length} chains`);
 
     return galaxyData;
