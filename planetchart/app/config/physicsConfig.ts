@@ -14,8 +14,9 @@ export const physicsConfig = {
     moonGravity: 0.005,             // Gravity constant for Moons pulling Asteroids
     friction: 0.99,                 // Velocity damping per tick (0.99 = 1% loss)
     moonFriction: 0.92,             // HEAVY friction for moons to dampen bounce (was 0.95)
-    repulsion: 4,                   // Soft repulsion force strength (reduced for gentleness)
-    damper: 0.5,                    // Collision velocity damping (0-1, for inelastic collisions)
+    repulsion: 1.5,                 // Soft repulsion force strength (for collisions)
+    repulsionCrossChain: 0.5,       // Weaker repulsion for cross-chain/cross-parent interactions
+    damper: 0.9,                    // HIGH collision velocity damping for grinding effect (energy loss)
 
     // ===== Stability & Limits =====
     orbitCorrectionStrength: 0.001,  // VERY LOW - let physics dominate to avoid sync bounce

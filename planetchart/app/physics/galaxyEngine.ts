@@ -288,30 +288,68 @@ export function tickGalaxy(state: GalaxyState, dt: number): void {
         node.vx += dx * correctionStrength * dt;
         node.vy += dy * correctionStrength * dt;
 
-        // --- Step 3: Apply Repulsion (Collision Prevention) ---
-        // Check vs other nodes to prevent overlap
-        // Optimization: Check only relevant neighbors if possible, but for <500 nodes, O(N^2) is okay-ish if optimized
-        // Let's do simple type-based checks
+        // --- Step 3: Apply Comprehensive Collision Physics (All Pairs) ---
+        // Prevent pass-through with soft repulsion + damping for ALL entity combinations
 
         if (node.type === 'planet') {
-            // Planets repel other planets
+            // Planet vs Planet
             planets.forEach(other => {
-                if (node.id !== other.id) applyRepulsion(node, other, dt);
-            });
-        } else if (node.type === 'moon') {
-            // Moons ONLY repel moons in SAME system (same parentId)
-            // This prevents expensive cross-system checks and reduces oscillation
-            moons.forEach(other => {
-                if (node.id !== other.id && node.parentId === other.parentId) {
-                    applyRepulsion(node, other, dt, 2.0); // STRONG repulsion to prevent overlaps
+                if (node.id !== other.id) {
+                    applyRepulsion(node, other, dt, 1.0);
                 }
             });
-            // REDUCED repulsion from parent planet (was 2.0, now 0.5)
-            // Moons should orbit close to parent, not be pushed away strongly
-            const parentPlanet = planets.find(p => p.id === node.parentId);
-            if (parentPlanet) {
-                applyRepulsion(node, parentPlanet, dt, 0.5);
-            }
+            // Planet vs Moon (all moons, not just children)
+            moons.forEach(moon => {
+                const isSameSystem = moon.parentId === node.id;
+                applyRepulsion(node, moon, dt, isSameSystem ? 0.5 : physicsConfig.repulsionCrossChain);
+            });
+        } else if (node.type === 'moon') {
+            // Moon vs Moon (same system - strong, cross-system - weak)
+            moons.forEach(other => {
+                if (node.id !== other.id) {
+                    const isSameSystem = node.parentId === other.parentId;
+                    const strength = isSameSystem ? 2.0 : physicsConfig.repulsionCrossChain;
+                    applyRepulsion(node, other, dt, strength);
+                }
+            });
+
+            // Moon vs Planet (parent and other planets)
+            planets.forEach(planet => {
+                const isParent = planet.id === node.parentId;
+                const strength = isParent ? 0.5 : physicsConfig.repulsionCrossChain;
+                applyRepulsion(node, planet, dt, strength);
+            });
+
+            // Moon vs Sun
+            applyRepulsion(node, state.sunNode, dt, physicsConfig.repulsionCrossChain * 0.5);
+
+            // Moon vs Meteorite
+            asteroids.forEach(asteroid => {
+                const isSameSystem = asteroid.parentId === node.id;
+                applyRepulsion(node, asteroid, dt, isSameSystem ? 1.0 : physicsConfig.repulsionCrossChain);
+            });
+        } else if (node.type === 'meteorite') {
+            // Meteorite vs Meteorite
+            asteroids.forEach(other => {
+                if (node.id !== other.id) {
+                    const isSameSystem = node.parentId === other.parentId;
+                    applyRepulsion(node, other, dt, isSameSystem ? 1.5 : physicsConfig.repulsionCrossChain);
+                }
+            });
+
+            // Meteorite vs Moon (parent and others)
+            moons.forEach(moon => {
+                const isParent = moon.id === node.parentId;
+                applyRepulsion(node, moon, dt, isParent ? 0.8 : physicsConfig.repulsionCrossChain);
+            });
+
+            // Meteorite vs Planet
+            planets.forEach(planet => {
+                applyRepulsion(node, planet, dt, physicsConfig.repulsionCrossChain);
+            });
+
+            // Meteorite vs Sun
+            applyRepulsion(node, state.sunNode, dt, physicsConfig.repulsionCrossChain * 0.3);
         }
 
         // --- Step 4: Update Position & Velocity ---
