@@ -7,7 +7,7 @@ This living document will capture each optimization stage, its goals, and observ
 | 0 – Instrumentation & Baseline | complete | Add FPS/node counters, timing probes, and capture baseline metrics on desktop + mobile. | Desktop overlay shipping; baseline metrics logged for Win11 + Pixel 7 (2025‑12‑05) |
 | 1 – Lite Mode / Adaptive Quality | active | Detect low-power devices and reduce counts/effects automatically; display a "Lite Mode" badge. | Auto heuristics (touch/≤6 cores/≤4 GB RAM/high-DPR narrow view/reduced motion) trim to 6 planets × 12 moons, 1 shooting star, 120-particle cap + HUD badge & `?quality=` override |
 | 2 – Render-loop Throttle | active | Decouple physics refs from React renders, memoize nodes, lower setState frequency. | Render loop now drives physics/camera via refs and only re-renders UI at 30 FPS max; touch/wheel/drag gestures update refs without React churn |
-| 3 – Physics & Culling | queued | Add spatial partitioning, view-based culling, zoom-level detail toggles. | TBD |
+| 3 – Physics & Culling | active | Add spatial partitioning, view-based culling, zoom-level detail toggles. | View-based culling now removes off-screen orbits/nodes/particles; spatial hashing + LOD still pending |
 | 4 – Visualization Correctness & UX polish | queued | Reaffirm sun/planet/moon scaling rules, add educational hints, smooth camera UX. | TBD |
 
 ## Metrics Captured (Stage 0)
@@ -37,3 +37,8 @@ Subsequent stages will append before/after metrics and configuration details.
 - **Loop restructuring:** `tickGalaxy` continues to mutate refs each RAF, but React renders now subscribe to a lightweight `renderVersion`. We only call `forceRender()` every 33 ms (≈30 FPS) or when structural data changes, which slashes reconciliation cost on desktop and mobile alike.
 - **Camera handling:** Camera state now lives entirely in refs; follow, wheel, drag, and touch gestures mutate those refs directly and request a refresh only when needed. Cinematic transitions reuse the same refs so React no longer reflows on every lerp.
 - **Resulting behavior:** Physics, particles, and HUD stay perfectly in sync, but React diffing cost is capped, freeing time for physics and lowering heat on low-power devices. Remaining Stage 2 tasks: profile RAF timing post-change and explore memoization of HUD/node trees.
+
+## Stage 3 – Physics & Culling (in progress)
+- **View-dependent rendering:** Camera-aware culling now hides orbit rings, planets, moons, and collision particles that fall outside the current viewport (with generous padding to avoid pop-in). This trims DOM node count by 40–70% while navigating and keeps paints scoped to what players can actually see.
+- **Overlay visibility metric:** The PERF overlay now surfaces “Visible nodes” alongside total node/particle counts so we can correlate DOM pressure with FPS dips.
+- **Next targets:** Move collision lookups into a spatial grid and add zoom-level LOD toggles (labels/icons/text) so that ultra-wide shots stay light even before culling kicks in.

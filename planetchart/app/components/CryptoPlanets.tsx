@@ -32,6 +32,7 @@ const QUALITY_BUDGETS = {
 } as const;
 
 const RENDER_FRAME_INTERVAL = 1000 / 30; // 30 FPS cap for React renders
+const VIEW_CULL_PADDING_PX = 220;
 
 type QualityOverride = "full" | "lite" | null;
 
@@ -575,6 +576,10 @@ export default function CryptoPlanets() {
     physicsMs: 0,
     cameraMs: 0,
   });
+  const [viewportSize, setViewportSize] = useState(() => ({
+    width: typeof window === "undefined" ? 1920 : window.innerWidth,
+    height: typeof window === "undefined" ? 1080 : window.innerHeight,
+  }));
   const perfSampleRef = useRef({
     frames: 0,
     lastTimestamp: typeof performance !== 'undefined' ? performance.now() : 0,
@@ -621,6 +626,57 @@ export default function CryptoPlanets() {
       dpr: window.devicePixelRatio || 1,
     });
     perfSampleRef.current.lastTimestamp = performance.now();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const updateViewport = () => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (rect && rect.width > 0 && rect.height > 0) {
+        setViewportSize(prev => (
+          prev.width === rect.width && prev.height === rect.height
+            ? prev
+            : { width: rect.width, height: rect.height }
+        ));
+      } else {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        setViewportSize(prev => (
+          prev.width === width && prev.height === height
+            ? prev
+            : { width, height }
+        ));
+      }
+    };
+
+    updateViewport();
+
+    let observer: ResizeObserver | null = null;
+
+    if (typeof ResizeObserver !== 'undefined' && containerRef.current) {
+      observer = new ResizeObserver((entries) => {
+        const entry = entries[0];
+        if (!entry) return;
+        const { width, height } = entry.contentRect;
+        setViewportSize(prev => (
+          prev.width === width && prev.height === height
+            ? prev
+            : { width, height }
+        ));
+      });
+      observer.observe(containerRef.current);
+    } else {
+      window.addEventListener('resize', updateViewport);
+    }
+
+    return () => {
+      if (observer) {
+        observer.disconnect();
+      } else {
+        window.removeEventListener('resize', updateViewport);
+      }
+    };
   }, []);
 
   useEffect(() => {
@@ -675,6 +731,25 @@ export default function CryptoPlanets() {
       if (resizeFrame) cancelAnimationFrame(resizeFrame);
     };
   }, [searchParams]);
+  
+  const isCircleVisible = useCallback((x: number, y: number, radius: number) => {
+    if (viewportSize.width <= 0 || viewportSize.height <= 0) {
+      return true;
+    }
+
+    const halfWidth = viewportSize.width / 2;
+    const halfHeight = viewportSize.height / 2;
+    const screenX = x * camera.zoom + camera.x;
+    const screenY = y * camera.zoom + camera.y;
+    const screenRadius = Math.max(radius * camera.zoom, 6);
+
+    return (
+      screenX + screenRadius + VIEW_CULL_PADDING_PX > -halfWidth &&
+      screenX - screenRadius - VIEW_CULL_PADDING_PX < halfWidth &&
+      screenY + screenRadius + VIEW_CULL_PADDING_PX > -halfHeight &&
+      screenY - screenRadius - VIEW_CULL_PADDING_PX < halfHeight
+    );
+  }, [camera.x, camera.y, camera.zoom, viewportSize.height, viewportSize.width]);
   
   // Touch gesture state
   const touchRef = useRef<{
@@ -1339,6 +1414,21 @@ export default function CryptoPlanets() {
     );
   }
 
+  const particles = getParticles();
+  const visiblePlanets = galaxyState.planetNodes.filter((node) =>
+    isCircleVisible(node.x, node.y, node.radius * 1.35)
+  );
+  const visibleMoons = galaxyState.moonNodes.filter((node) =>
+    isCircleVisible(node.x, node.y, node.radius * 1.5)
+  );
+  const visibleOrbitRings = galaxyState.planetNodes.filter((node) =>
+    isCircleVisible(0, 0, node.orbitRadius + node.radius)
+  );
+  const visibleParticles = particles.filter((particle) =>
+    isCircleVisible(particle.x, particle.y, particle.size)
+  );
+  const visibleNodeCount = 1 + visiblePlanets.length + visibleMoons.length;
+
   return (
     <div
       ref={containerRef}
@@ -1373,7 +1463,7 @@ export default function CryptoPlanets() {
           }}
         >
           {/* Orbit rings */}
-          {galaxyState.planetNodes.map(node => (
+          {visibleOrbitRings.map(node => (
             <OrbitRing key={`ring-${node.id}`} radius={node.orbitRadius} />
           ))}
 
@@ -1384,7 +1474,7 @@ export default function CryptoPlanets() {
           />
 
           {/* Planets */}
-          {galaxyState.planetNodes.map(node => (
+          {visiblePlanets.map(node => (
             <PlanetNode 
               key={node.id} 
               node={node}
@@ -1392,7 +1482,7 @@ export default function CryptoPlanets() {
           ))}
 
           {/* Moons */}
-          {galaxyState.moonNodes.map(node => (
+          {visibleMoons.map(node => (
             <MoonNode 
               key={node.id} 
               node={node}
@@ -1400,7 +1490,7 @@ export default function CryptoPlanets() {
           ))}
 
           {/* Collision particle effects */}
-          <ParticleLayer particles={getParticles()} />
+          <ParticleLayer particles={visibleParticles} />
         </div>
       </div>
 
@@ -1636,6 +1726,7 @@ export default function CryptoPlanets() {
             <div className="space-y-1 text-sm">
               <div className="flex justify-between"><span>FPS</span><span>{perfStats.fps.toFixed(1)}</span></div>
               <div className="flex justify-between"><span>Nodes</span><span>{perfStats.nodes}</span></div>
+              <div className="flex justify-between"><span>Visible nodes</span><span>{visibleNodeCount}</span></div>
               <div className="flex justify-between"><span>Particles</span><span>{perfStats.particles}</span></div>
               <div className="flex justify-between"><span>Physics (ms)</span><span>{perfStats.physicsMs.toFixed(2)}</span></div>
               <div className="flex justify-between"><span>Camera (ms)</span><span>{perfStats.cameraMs.toFixed(2)}</span></div>
