@@ -3,6 +3,12 @@
 // Based on N-body lite with soft repulsion and damping
 
 export const physicsConfig = {
+    // ===== Debug Aids =====
+    enableOrbitDebug: false,
+    orbitDebugRadiusThreshold: 120,   // px change within single frame before logging
+    orbitDebugAngleThreshold: 0.25,   // radians change before logging (~14 degrees)
+    railSnapLerp: 0.1,                // How aggressively nodes slide back to rail when calm (1 = instant)
+
     // ===== Orbital Motion (Deterministic) =====
     baseChainAngularVel: 0.0002,    // Base angular velocity for chain orbits (radians/frame)
     baseTokenAngularVel: 0.0008,    // Moons orbit at comfortable visible speed
@@ -21,6 +27,18 @@ export const physicsConfig = {
     // ===== Stability & Limits =====
     orbitCorrectionStrength: 0.04,  // 80/20 BLEND: 4% correction per tick pulls back to orbit
     maxVelocity: 4,                 // LOWER cap - prevent explosions, keep motion slow/cosmic
+
+    // ===== Planetary Field (Option B) =====
+    fieldInnerPadding: 140,         // Gap from planet surface to moon field start (px)
+    fieldBaseThickness: 900,        // Base width of the controllable moon field (px)
+    fieldPerMoonSpread: 18,         // Widens the band per moon to honor option B density scaling
+    fieldMoonSizeSpread: 1.15,      // Extra width per px of average moon radius
+    fieldInnerSizeBias: 0.28,       // Push inner wall outward based on moon radius
+    fieldOuterSizeBias: 1.1,        // Push outer wall outward based on moon radius
+    fieldSpringStrength: 0.3,       // How hard calm moons steer back inside the band (0-1)
+    fieldRelaxRate: 0.06,           // Rate deterministic orbit eases toward field midpoint
+    fieldVelocitySpring: 0.016,     // Radial acceleration applied in free flight when breaching
+    fieldBoundaryDamping: 0.88,     // Damping when bouncing off the field boundary
 
     // ===== Collision & Visuals =====
     collidePadding: 40,             // Extra spacing for collision detection (px) - 9x scale

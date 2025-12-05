@@ -35,6 +35,13 @@ export const CHAIN_TOKENS: Record<string, string[]> = {
         "ethereum-name-service", // ENS
         "pendle",           // PENDLE
         "curve-dao-token",  // CRV
+        // Stablecoins & wrapped (toggleable)
+        "tether",           // USDT
+        "usd-coin",         // USDC
+        "dai",              // DAI
+        "frax",             // FRAX stablecoin
+        "wrapped-bitcoin",  // WBTC
+        "weth",             // WETH
     ],
     
     // Solana - SPL tokens native to Solana
@@ -54,6 +61,9 @@ export const CHAIN_TOKENS: Record<string, string[]> = {
         "official-trump",   // TRUMP
         "book-of-meme",     // BOME
         "cat-in-a-dogs-world", // MEW
+        // Stablecoins & wrapped (toggleable)
+        "usd-coin",         // USDC (Solana)
+        "tether",           // USDT (Solana)
     ],
     
     // BNB Chain (BSC) - BEP-20 tokens
@@ -67,6 +77,11 @@ export const CHAIN_TOKENS: Record<string, string[]> = {
         "alpaca-finance",   // ALPACA
         "biswap",           // BSW
         "coin98",           // C98
+        // Stablecoins & wrapped (toggleable)
+        "binance-usd",      // BUSD
+        "tether",           // USDT (BSC)
+        "usd-coin",         // USDC (BSC)
+        "wbnb",             // WBNB
     ],
     
     // Base - Coinbase L2
@@ -77,6 +92,11 @@ export const CHAIN_TOKENS: Record<string, string[]> = {
         "degen-base",       // DEGEN
         "virtual-protocol", // VIRTUAL
         "extra-finance",    // EXTRA
+        // Stablecoins & wrapped (toggleable)
+        "usd-coin",         // USDC (Base)
+        "dai",              // DAI bridge
+        "weth",             // WETH on Base
+        "coinbase-wrapped-staked-eth", // cbETH
     ],
     
     // Arbitrum - ARB ecosystem
@@ -88,6 +108,12 @@ export const CHAIN_TOKENS: Record<string, string[]> = {
         "radiant-capital",  // RDNT
         "camelot-token",    // GRAIL
         "dopex",            // DPX
+        // Stablecoins & wrapped (toggleable)
+        "tether",           // USDT (Arbitrum)
+        "usd-coin",         // USDC (Arbitrum)
+        "dai",              // DAI (Arbitrum)
+        "frax",             // FRAX (Arbitrum)
+        "wrapped-bitcoin",  // WBTC (Arbitrum)
     ],
     
     // Avalanche - AVAX ecosystem
@@ -97,6 +123,11 @@ export const CHAIN_TOKENS: Record<string, string[]> = {
         "pangolin",         // PNG
         "platypus-finance", // PTP
         "vector-finance",   // VTX
+        // Stablecoins & wrapped
+        "tether",           // USDT (Avalanche)
+        "usd-coin",         // USDC (Avalanche)
+        "dai",              // DAI (Avalanche)
+        "wrapped-bitcoin",  // WBTC (Avalanche)
     ],
     
     // Polygon - POL/MATIC ecosystem
@@ -109,6 +140,12 @@ export const CHAIN_TOKENS: Record<string, string[]> = {
         "quickswap",        // QUICK
         "balancer",         // BAL
         "sushi",            // SUSHI
+        // Stablecoins & wrapped (toggleable)
+        "tether",           // USDT (Polygon)
+        "usd-coin",         // USDC (Polygon)
+        "dai",              // DAI (Polygon)
+        "frax",             // FRAX (Polygon)
+        "wrapped-bitcoin",  // WBTC (Polygon)
     ],
     
     // PulseChain - Richard Heart ecosystem
@@ -119,6 +156,10 @@ export const CHAIN_TOKENS: Record<string, string[]> = {
         "hedron",           // HDRN
         "phiat-protocol",   // PHIAT
         "liquid-loans",     // LOAN
+        // Stablecoins & wrapped (bridged)
+        "dai",              // DAI bridge
+        "usd-coin",         // USDC bridge
+        "tether",           // USDT bridge
         // PLSD (PulseDogecoin) not on CoinGecko - needs DexScreener
     ],
     
@@ -128,6 +169,10 @@ export const CHAIN_TOKENS: Record<string, string[]> = {
         "tectonic",         // TONIC
         "ferro",            // FER
         "mmfinance",        // MMF (correct CoinGecko ID)
+        // Stablecoins & wrapped
+        "tether",           // USDT (Cronos)
+        "usd-coin",         // USDC (Cronos)
+        "wrapped-bitcoin",  // WBTC (Cronos)
     ],
     
     // Fantom - FTM ecosystem
@@ -136,6 +181,11 @@ export const CHAIN_TOKENS: Record<string, string[]> = {
         "beets",            // BEETS (Beethoven-X)
         "beefy-finance",    // BIFI
         // spiritswap and geist-finance are delisted from CoinGecko
+        // Stablecoins & wrapped
+        "tether",           // USDT (Fantom)
+        "usd-coin",         // USDC (Fantom)
+        "dai",              // DAI (Fantom)
+        "wrapped-bitcoin",  // WBTC (Fantom)
     ],
     
     // Optimism - OP ecosystem
@@ -144,6 +194,11 @@ export const CHAIN_TOKENS: Record<string, string[]> = {
         "synthetix-network-token", // SNX (big on OP)
         "thales",           // THALES
         "extra-finance",    // EXTRA
+        // Stablecoins & wrapped
+        "tether",           // USDT (Optimism)
+        "usd-coin",         // USDC (Optimism)
+        "dai",              // DAI (Optimism)
+        "frax",             // FRAX (Optimism)
     ],
 };
 

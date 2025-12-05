@@ -274,7 +274,7 @@ export async function fetchEcosystemTokensFromCoinGecko(
 
 /**
  * Fetch prices for multiple coins by their CoinGecko IDs
- * Usedto get native token prices for chains (ETH, SOL, BNB, etc.)
+ * Used to get native token prices for chains (ETH, SOL, BNB, etc.)
  */
 export async function fetchCoinsPrices(coinIds: string[]): Promise<Record<string, number>> {
     if (coinIds.length === 0) return {};
@@ -293,7 +293,7 @@ export async function fetchCoinsPrices(coinIds: string[]): Promise<Record<string
 
     try {
         const ids = coinIds.join(',');
-        const url = `${dataConfig.coinGecko.baseURL}/simple/price?ids=${encodeURIComponent(ids)}&vs_currencies=usd`;
+        const url = `${dataConfig.coinGecko.baseURL}/simple/price?ids=${encodeURIComponent(ids)}&vs_currencies=usd&include_market_cap=true`;
         debugLog('data', `Fetching prices for coins: ${ids}`);
 
         // Add API key if available
@@ -326,6 +326,57 @@ export async function fetchCoinsPrices(coinIds: string[]): Promise<Record<string
         return prices;
     } catch (error) {
         debugLog('data', `Error fetching coin prices: ${error}`);
+        return {};
+    }
+}
+
+/**
+ * Fetch market caps for multiple coins by their CoinGecko IDs
+ * Returns a map of coinId -> market cap in USD
+ */
+export async function fetchCoinMarketCaps(coinIds: string[]): Promise<Record<string, number>> {
+    if (coinIds.length === 0) return {};
+
+    // Return mock data if flag is set
+    if (USE_MOCK_COINGECKO) {
+        debugLog('data', `Using MOCK market caps for coins: ${coinIds.join(', ')}`);
+        const mockCaps: Record<string, number> = {};
+        coinIds.forEach(id => {
+            mockCaps[id] = Math.random() * 500000000000 + 1000000000; // Random between $1B - $500B
+        });
+        return mockCaps;
+    }
+
+    try {
+        const ids = coinIds.join(',');
+        const url = `${dataConfig.coinGecko.baseURL}/simple/price?ids=${encodeURIComponent(ids)}&vs_currencies=usd&include_market_cap=true`;
+        debugLog('data', `Fetching market caps for coins: ${ids}`);
+
+        const apiKey = process.env.COINGECKO_API_KEY;
+        const headers: HeadersInit = apiKey ? { 'x-cg-demo-api-key': apiKey } : {};
+
+        const response = await fetch(url, { headers });
+
+        if (!response.ok) {
+            debugLog('data', `CoinGecko API error for market caps: ${response.status}`);
+            return {};
+        }
+
+        const rawData = await response.json();
+
+        // Transform to our format: { "ethereum": 360000000000, "solana": 70000000000, ... }
+        const marketCaps: Record<string, number> = {};
+        Object.entries(rawData).forEach(([coinId, data]) => {
+            const coinData = data as { usd_market_cap?: number };
+            if (coinData && coinData.usd_market_cap) {
+                marketCaps[coinId] = coinData.usd_market_cap;
+            }
+        });
+
+        debugLog('data', `OK: Fetched ${Object.keys(marketCaps).length} coin market caps`);
+        return marketCaps;
+    } catch (error) {
+        debugLog('data', `Error fetching coin market caps: ${error}`);
         return {};
     }
 }

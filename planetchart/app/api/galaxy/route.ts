@@ -54,7 +54,7 @@ async function fetchGalaxyDataFromAPIs(weightMode: WeightMode, filters: FilterOp
     // Import services dynamically to avoid circular dependencies
     const { fetchChainsTVL } = await import('@/services/defiLlama');
     const { fetchHEXData, fetchDexScreenerTokensByAddress } = await import('@/services/dexScreener');
-    const { fetchBTCStats, fetchSpecificTokens, fetchCoinsPrices, fetchCoinIcons } = await import('@/services/coinGecko');
+    const { fetchBTCStats, fetchSpecificTokens, fetchCoinsPrices, fetchCoinIcons, fetchCoinMarketCaps } = await import('@/services/coinGecko');
     const { getPulseChainData } = await import('@/services/pulseChain');
     const { dataConfig, CHAIN_TOKENS, DEXSCREENER_TOKENS, STABLECOIN_SYMBOLS, WRAPPED_PATTERNS, CHAIN_NATIVE_SYMBOLS, DEFAULT_FILTERS } = await import('@/config/dataConfig');
 
@@ -71,7 +71,7 @@ async function fetchGalaxyDataFromAPIs(weightMode: WeightMode, filters: FilterOp
     const calculateWeight = (chain: ChainData, mode: WeightMode): number => {
         switch (mode) {
             case 'TVL': return chain.tvl;
-            case 'MarketCap': return chain.tvl;
+            case 'MarketCap': return chain.marketCap || chain.tvl; // Use marketCap if available, fallback to TVL
             case 'Volume24h': return chain.volume24h;
             case 'Change24h': return Math.abs(chain.change24h);
             default: return chain.tvl;
@@ -102,26 +102,40 @@ async function fetchGalaxyDataFromAPIs(weightMode: WeightMode, filters: FilterOp
         .sort((a, b) => b.weight - a.weight)
         .slice(0, dataConfig.maxChains);
 
-    // 3. Fetch Prices and Icons (Batch - single API call for all chains)
+    // 3. Fetch Prices, Market Caps, and Icons (Batch - single API call for all chains)
     const geckoIds = weightedChains
         .map(c => c.geckoId)
         .filter((id): id is string => id !== undefined && id !== null);
 
-    console.log(`[API] Fetching prices/icons for ${geckoIds.length} chains in single batch`);
-    const [chainPrices, chainIcons] = await Promise.all([
+    console.log(`[API] Fetching prices/icons/marketcaps for ${geckoIds.length} chains in single batch`);
+    const [chainPrices, chainIcons, chainMarketCaps] = await Promise.all([
         fetchCoinsPrices(geckoIds),
-        fetchCoinIcons(geckoIds)
+        fetchCoinIcons(geckoIds),
+        fetchCoinMarketCaps(geckoIds)
     ]);
 
-    // Apply chain prices and icons
+    // Apply chain prices, icons, and MARKET CAPS
     weightedChains.forEach(chain => {
         if (chain.geckoId) {
             if (chainPrices[chain.geckoId]) chain.price = chainPrices[chain.geckoId];
             if (chainIcons[chain.geckoId]) chain.icon = chainIcons[chain.geckoId];
+            if (chainMarketCaps[chain.geckoId]) chain.marketCap = chainMarketCaps[chain.geckoId];
         }
     });
+    
+    // RECALCULATE weights now that we have market caps
+    // This ensures MarketCap mode uses actual market caps, not just TVL
+    weightedChains.forEach(chain => {
+        chain.weight = calculateWeight(chain, weightMode);
+    });
+    // Re-sort after recalculation
+    weightedChains.sort((a, b) => b.weight - a.weight);
 
-    const totalVal = btcData.marketCap + allChains.reduce((sum, c) => sum + c.tvl, 0);
+    // Calculate total value based on mode
+    // For MarketCap mode, use actual market caps; for TVL mode, use TVL
+    const totalVal = weightMode === 'MarketCap' 
+        ? btcData.marketCap + weightedChains.reduce((sum, c) => sum + (c.marketCap || c.tvl), 0)
+        : btcData.marketCap + allChains.reduce((sum, c) => sum + c.tvl, 0);
 
     // Fetch HEX data from DexScreener (CoinGecko has broken market cap data for HEX)
     const hexData = await fetchHEXData();

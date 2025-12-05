@@ -13,7 +13,7 @@ const CAMERA_CONFIG = {
     
     // Transition smoothing
     transitionDuration: 1000,     // ms for smooth zoom transitions
-    zoomLerpSpeed: 0.08,          // Zoom interpolation speed (slightly faster for responsiveness)
+    zoomLerpSpeed: 0.15,          // Zoom interpolation speed - SMOOTH zoom while following
     
     // Zoom limits - EXPANDED for full galaxy view
     minZoom: 0.003,               // Allow extreme zoom out to see entire galaxy

@@ -5,18 +5,85 @@ import { useSearchParams } from "next/navigation";
 import {
   GalaxyState,
   GalaxyNode,
-  WeightMode
+  WeightMode,
+  GalaxyData
 } from "@/types/galaxy";
 import { loadGalaxyData } from "@/services/dataLoader";
 import { initGalaxyState, tickGalaxy } from "@/physics/galaxyEngine";
 import { CAMERA_CONFIG, updateFollowCamera, calculateIdealZoom, createCinematicTransition, updateCinematicTransition, CameraTransition } from "@/physics/cameraEngine";
-import { getParticles, getShakeOffset, Particle } from "@/physics/collision";
+import { getParticles, getShakeOffset, Particle, setParticleBudget, collisionConfig } from "@/physics/collision";
 import { uiConfig } from "@/config/uiConfig";
+import type { QualityMode } from "@/types/performance";
 import Starfield from "./Starfield";
 import Footer from "./Footer";
 import GalaxyHUD from "./GalaxyHUD";
 import RadialMenu from "./RadialMenu";
 import MobileHUD from "./MobileHUD";
+
+const QUALITY_BUDGETS = {
+  lite: {
+    maxChains: 6,
+    tokensPerChain: 12,
+    particleCap: 120,
+  },
+  full: {
+    particleCap: collisionConfig.maxParticles,
+  },
+} as const;
+
+const RENDER_FRAME_INTERVAL = 1000 / 30; // 30 FPS cap for React renders
+
+type QualityOverride = "full" | "lite" | null;
+
+function evaluateQualityMode(override: QualityOverride): { mode: QualityMode; reasons: string[] } {
+  if (override === "full" || override === "lite") {
+    return {
+      mode: override,
+      reasons: ["URL override"],
+    };
+  }
+
+  if (typeof window === "undefined" || typeof navigator === "undefined") {
+    return { mode: "full", reasons: [] };
+  }
+
+  const nav = navigator as Navigator & {
+    deviceMemory?: number;
+    userAgentData?: { mobile?: boolean };
+  };
+
+  const cores = typeof nav.hardwareConcurrency === "number" ? nav.hardwareConcurrency : 0;
+  const touchProfile = Boolean(nav.maxTouchPoints && nav.maxTouchPoints > 1) || Boolean(nav.userAgentData?.mobile);
+  const deviceMemory = typeof nav.deviceMemory === "number" ? nav.deviceMemory : undefined;
+  const dpr = typeof window.devicePixelRatio === "number" ? window.devicePixelRatio : 1;
+  const viewportWidth = typeof window.innerWidth === "number" ? window.innerWidth : 1920;
+  const reducedMotion = typeof window.matchMedia === "function"
+    ? window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    : false;
+
+  const triggers = {
+    touch: touchProfile,
+    cores: cores > 0 && cores <= 6,
+    memory: typeof deviceMemory === "number" && deviceMemory <= 4,
+    reducedMotion,
+    viewportDensity: viewportWidth <= 1024 && dpr >= 2.5,
+  };
+
+  const shouldLite = Object.values(triggers).some(Boolean);
+
+  if (!shouldLite) {
+    return { mode: "full", reasons: [] };
+  }
+
+  const reasons: string[] = [];
+  if (triggers.touch) reasons.push("Touch input profile");
+  if (triggers.cores) reasons.push(`${cores || "?"} logical cores reported`);
+  if (triggers.memory && typeof deviceMemory === "number") reasons.push(`${deviceMemory}GB device memory profile`);
+  if (triggers.reducedMotion) reasons.push("Prefers reduced motion");
+  if (triggers.viewportDensity) reasons.push(`Viewport ${viewportWidth}px @ ${dpr.toFixed(1)}× DPR`);
+
+  return { mode: "lite", reasons };
+}
 
 // ============================================================================
 // PERFORMANCE OPTIMIZATIONS (agar.io inspired):
@@ -486,20 +553,51 @@ export default function CryptoPlanets() {
   const initialUrlProcessed = useRef(false);
   const pendingFollowId = useRef<string | null>(null);
 
-  const [galaxyState, setGalaxyState] = useState<GalaxyState | null>(null);
+  const [renderVersion, setRenderVersion] = useState(0);
+  const forceRender = useCallback(() => {
+    setRenderVersion((v) => (v + 1) % 1_000_000);
+  }, []);
   const [weightMode, setWeightMode] = useState<WeightMode>("MarketCap");
-  const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 0.05 });
+  const cameraRef = useRef({ x: 0, y: 0, zoom: 0.05 });
+  const camera = cameraRef.current;
   const [isLoading, setIsLoading] = useState(true);
   const [linkCopied, setLinkCopied] = useState(false);
   
   // Token filter state (default: hide stablecoins and wrapped)
   const [hideStables, setHideStables] = useState(true);
   const [hideWrapped, setHideWrapped] = useState(true);
+
+  const [showPerfOverlay, setShowPerfOverlay] = useState(false);
+  const [perfStats, setPerfStats] = useState({
+    fps: 0,
+    nodes: 0,
+    particles: 0,
+    physicsMs: 0,
+    cameraMs: 0,
+  });
+  const perfSampleRef = useRef({
+    frames: 0,
+    lastTimestamp: typeof performance !== 'undefined' ? performance.now() : 0,
+    lastPhysics: 0,
+    lastCamera: 0,
+  });
+  const [deviceInfo, setDeviceInfo] = useState<{ cores: number | null; dpr: number }>({
+    cores: null,
+    dpr: 1,
+  });
+  const [qualityMode, setQualityMode] = useState<QualityMode>("full");
+  const [qualityReasons, setQualityReasons] = useState<string[]>([]);
   
   // Camera follow state
   const [followingId, setFollowingId] = useState<string | null>(null);
   const [targetZoom, setTargetZoom] = useState<number>(0.05);
+  const followingIdRef = useRef<string | null>(null);
   
+  // Keep ref in sync with state
+  useEffect(() => {
+    followingIdRef.current = followingId;
+  }, [followingId]);
+
   // Cinematic transition state
   const transitionRef = useRef<CameraTransition | null>(null);
   const [isTransitioning, setIsTransitioning] = useState(false);
@@ -515,6 +613,68 @@ export default function CryptoPlanets() {
   
   // Mobile detection
   const [isMobile, setIsMobile] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    setDeviceInfo({
+      cores: typeof navigator !== 'undefined' ? navigator.hardwareConcurrency ?? null : null,
+      dpr: window.devicePixelRatio || 1,
+    });
+    perfSampleRef.current.lastTimestamp = performance.now();
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const overrideParam = searchParams.get('quality');
+    const override: QualityOverride = overrideParam === 'lite' || overrideParam === 'full' ? overrideParam : null;
+
+    const applyQualityMode = () => {
+      const { mode, reasons } = evaluateQualityMode(override);
+      setQualityMode(mode);
+      setQualityReasons(reasons);
+    };
+
+    applyQualityMode();
+
+    if (override) {
+      return;
+    }
+
+    let resizeFrame = 0;
+    const handleResize = () => {
+      if (resizeFrame) cancelAnimationFrame(resizeFrame);
+      resizeFrame = requestAnimationFrame(applyQualityMode);
+    };
+
+    window.addEventListener('resize', handleResize);
+
+    const motionQuery = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(prefers-reduced-motion: reduce)')
+      : null;
+
+    const handleMotionPreference = () => applyQualityMode();
+
+    if (motionQuery) {
+      if (typeof motionQuery.addEventListener === 'function') {
+        motionQuery.addEventListener('change', handleMotionPreference);
+      } else if (typeof motionQuery.addListener === 'function') {
+        motionQuery.addListener(handleMotionPreference);
+      }
+    }
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      if (motionQuery) {
+        if (typeof motionQuery.removeEventListener === 'function') {
+          motionQuery.removeEventListener('change', handleMotionPreference);
+        } else if (typeof motionQuery.removeListener === 'function') {
+          motionQuery.removeListener(handleMotionPreference);
+        }
+      }
+      if (resizeFrame) cancelAnimationFrame(resizeFrame);
+    };
+  }, [searchParams]);
   
   // Touch gesture state
   const touchRef = useRef<{
@@ -547,10 +707,17 @@ export default function CryptoPlanets() {
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
   
+  const requestRef = useRef<number>(0);
+  const previousTimeRef = useRef<number>(0);
+  const galaxyStateRef = useRef<GalaxyState | null>(null);
+  const galaxyState = galaxyStateRef.current;
+  const lastRenderTimeRef = useRef(0);
+
   // Compute the display name for the currently followed node
   const followingInfo = useMemo(() => {
-    if (!followingId || !galaxyState) return null;
-    const node = galaxyState.nodes.find(n => n.id === followingId);
+    const snapshot = galaxyStateRef.current;
+    if (!followingId || !snapshot) return null;
+    const node = snapshot.nodes.find(n => n.id === followingId);
     if (!node) return null;
     
     const symbol = ('symbol' in node.data ? node.data.symbol : null)
@@ -558,11 +725,31 @@ export default function CryptoPlanets() {
       || followingId.toUpperCase();
     
     return { symbol, type: node.type };
-  }, [followingId, galaxyState]);
-  
-  const requestRef = useRef<number>(0);
-  const previousTimeRef = useRef<number>(0);
-  const galaxyStateRef = useRef<GalaxyState | null>(null);
+  }, [followingId, renderVersion]);
+
+  const recordPerfSample = useCallback((physicsMs: number, cameraMs: number) => {
+    if (!showPerfOverlay || typeof performance === 'undefined') return;
+    const sample = perfSampleRef.current;
+    const now = performance.now();
+    if (!sample.lastTimestamp) sample.lastTimestamp = now;
+    sample.frames += 1;
+    sample.lastPhysics = physicsMs;
+    sample.lastCamera = cameraMs;
+
+    if (now - sample.lastTimestamp >= 300) {
+      const elapsed = (now - sample.lastTimestamp) / 1000;
+      const fps = sample.frames / Math.max(elapsed, 0.001);
+      sample.frames = 0;
+      sample.lastTimestamp = now;
+      setPerfStats({
+        fps,
+        nodes: galaxyStateRef.current?.nodes.length ?? 0,
+        particles: getParticles().length,
+        physicsMs,
+        cameraMs,
+      });
+    }
+  }, [showPerfOverlay]);
 
   // Read URL params on mount to get initial follow target
   useEffect(() => {
@@ -580,30 +767,57 @@ export default function CryptoPlanets() {
   }, [searchParams]);
 
   // Track previous filter state to detect changes
-  const prevFiltersRef = useRef({ hideStables, hideWrapped, weightMode });
+  const prevFiltersRef = useRef({ hideStables, hideWrapped, weightMode, qualityMode });
+
+  const applyQualityBudgets = useCallback((data: GalaxyData): GalaxyData => {
+    if (qualityMode !== 'lite') {
+      return data;
+    }
+
+    const trimmedChains = data.chains
+      .slice(0, QUALITY_BUDGETS.lite.maxChains)
+      .map(chain => ({
+        ...chain,
+        tokens: chain.tokens.slice(0, QUALITY_BUDGETS.lite.tokensPerChain),
+      }));
+
+    return {
+      ...data,
+      chains: trimmedChains,
+    };
+  }, [qualityMode]);
+
+  useEffect(() => {
+    const cap = qualityMode === 'lite'
+      ? QUALITY_BUDGETS.lite.particleCap
+      : QUALITY_BUDGETS.full.particleCap;
+    setParticleBudget(cap);
+  }, [qualityMode]);
   
   // Initialize galaxy - only full reinit on weight mode change
   // Filter changes use cached data for instant switch
   useEffect(() => {
     const prevFilters = prevFiltersRef.current;
     const isWeightModeChange = prevFilters.weightMode !== weightMode;
+    const isQualityModeChange = prevFilters.qualityMode !== qualityMode;
     
     // Update ref
-    prevFiltersRef.current = { hideStables, hideWrapped, weightMode };
+    prevFiltersRef.current = { hideStables, hideWrapped, weightMode, qualityMode };
     
     async function init() {
       // Only show loading spinner for weight mode changes (takes longer)
-      if (isWeightModeChange || !galaxyStateRef.current) {
+      if (isWeightModeChange || isQualityModeChange || !galaxyStateRef.current) {
         setIsLoading(true);
       }
       
       try {
         const data = await loadGalaxyData(weightMode, { hideStables, hideWrapped });
-        const initialState = initGalaxyState(data);
+        const shapedData = applyQualityBudgets(data);
+        const initialState = initGalaxyState(shapedData);
 
         // Only reset camera on fresh init or weight mode change
-        if (isWeightModeChange || !galaxyStateRef.current) {
-          setCamera({ x: 0, y: 0, zoom: 0.03 });
+        if (isWeightModeChange || isQualityModeChange || !galaxyStateRef.current) {
+          cameraRef.current = { x: 0, y: 0, zoom: 0.03 };
           setTargetZoom(0.03);
           // Clear follow on weight mode change
           setFollowingId(null);
@@ -612,7 +826,7 @@ export default function CryptoPlanets() {
         }
 
         galaxyStateRef.current = initialState;
-        setGalaxyState(initialState);
+        forceRender();
       } catch (e) {
         console.error("Failed to init galaxy:", e);
       } finally {
@@ -620,17 +834,18 @@ export default function CryptoPlanets() {
       }
     }
     init();
-  }, [weightMode, hideStables, hideWrapped]);
+  }, [weightMode, hideStables, hideWrapped, qualityMode, applyQualityBudgets, forceRender]);
   
   // Process pending follow from URL after galaxy is loaded
   useEffect(() => {
-    if (galaxyState && pendingFollowId.current && !initialUrlProcessed.current) {
+    const snapshot = galaxyStateRef.current;
+    if (snapshot && pendingFollowId.current && !initialUrlProcessed.current) {
       initialUrlProcessed.current = true;
       const targetId = pendingFollowId.current;
       pendingFollowId.current = null;
       
       // Find the node - could be sun, planet, or moon
-      const node = galaxyState.nodes.find(n => n.id === targetId);
+      const node = snapshot.nodes.find(n => n.id === targetId);
       if (node) {
         // Use direct positioning instead of cinematic transition for URL loads
         // This gives immediate focus without the swoosh animation
@@ -638,16 +853,17 @@ export default function CryptoPlanets() {
         const viewportHeight = window.innerHeight;
         const idealZoom = calculateIdealZoom(node.radius, node.type as 'sun' | 'planet' | 'moon', viewportWidth, viewportHeight);
         
-        setCamera({
+        cameraRef.current = {
           x: -node.x * idealZoom,
           y: -node.y * idealZoom,
           zoom: idealZoom
-        });
+        };
+        forceRender();
         setTargetZoom(idealZoom);
         setFollowingId(targetId);
       }
     }
-  }, [galaxyState]);
+  }, [renderVersion, forceRender]);
 
   // Animation loop with camera follow and cinematic transitions
   useEffect(() => {
@@ -656,8 +872,12 @@ export default function CryptoPlanets() {
         const deltaTime = time - previousTimeRef.current;
         const dt = Math.min(deltaTime, 32) / 16.67;
 
-        // Update physics
+        const perfAvailable = typeof performance !== 'undefined';
+        const physicsStart = perfAvailable ? performance.now() : 0;
         tickGalaxy(galaxyStateRef.current, dt);
+        const physicsDuration = perfAvailable ? performance.now() - physicsStart : 0;
+        const cameraStart = perfAvailable ? performance.now() : 0;
+        let cameraDuration = 0;
         
         // Handle cinematic transition (takes priority over regular follow)
         if (transitionRef.current?.active && galaxyStateRef.current) {
@@ -673,7 +893,7 @@ export default function CryptoPlanets() {
               targetNode.y
             );
             
-            setCamera(result.camera);
+            cameraRef.current = result.camera;
             transitionRef.current = result.transition;
             
             if (result.complete) {
@@ -687,26 +907,32 @@ export default function CryptoPlanets() {
         else if (followingId && galaxyStateRef.current && !isTransitioning) {
           const targetNode = galaxyStateRef.current.nodes.find(n => n.id === followingId);
           if (targetNode) {
-            setCamera(prev => {
-              const updated = updateFollowCamera(
-                prev,
-                targetNode.x,
-                targetNode.y,
-                prev.zoom,
-                CAMERA_CONFIG.followLerpSpeed
-              );
-              
-              // Also smoothly interpolate zoom to target
-              const zoomDiff = targetZoom - prev.zoom;
-              const newZoom = prev.zoom + zoomDiff * CAMERA_CONFIG.zoomLerpSpeed;
-              
-              return { ...updated, zoom: newZoom };
-            });
+            const prevCamera = cameraRef.current;
+            const updated = updateFollowCamera(
+              prevCamera,
+              targetNode.x,
+              targetNode.y,
+              prevCamera.zoom,
+              CAMERA_CONFIG.followLerpSpeed
+            );
+
+            // Also smoothly interpolate zoom to target
+            const zoomDiff = targetZoom - prevCamera.zoom;
+            const newZoom = prevCamera.zoom + zoomDiff * CAMERA_CONFIG.zoomLerpSpeed;
+
+            cameraRef.current = { ...updated, zoom: newZoom };
           }
         }
-        
-        // Trigger re-render with new state reference
-        setGalaxyState({ ...galaxyStateRef.current });
+        if (perfAvailable) {
+          cameraDuration = performance.now() - cameraStart;
+        }
+        recordPerfSample(physicsDuration, cameraDuration);
+
+        const timeSinceRender = time - lastRenderTimeRef.current;
+        if (timeSinceRender >= RENDER_FRAME_INTERVAL) {
+          lastRenderTimeRef.current = time;
+          forceRender();
+        }
       }
       previousTimeRef.current = time;
       requestRef.current = requestAnimationFrame(animate);
@@ -714,7 +940,7 @@ export default function CryptoPlanets() {
 
     requestRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(requestRef.current);
-  }, [followingId, targetZoom, isTransitioning]);
+  }, [followingId, targetZoom, isTransitioning, recordPerfSample, forceRender]);
 
   // Handle follow planet - from HUD or radial menu
   // Uses cinematic "swoosh" transition: zoom out → pan via center → zoom in
@@ -752,7 +978,7 @@ export default function CryptoPlanets() {
     
     // Start cinematic transition
     transitionRef.current = createCinematicTransition(
-      camera,
+      cameraRef.current,
       node.x,
       node.y,
       nodeId,
@@ -764,56 +990,56 @@ export default function CryptoPlanets() {
     setIsTransitioning(true);
     setFollowingId(nodeId);
     setTargetZoom(idealZoom);
-  }, [camera]);
+  }, []);
 
-  // Camera wheel zoom - ZOOM TO CURSOR with smooth interpolation
+  // Camera wheel zoom - ZOOM TO CURSOR or ZOOM TO FOLLOWED ENTITY
   useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
+    const clampZoom = (value: number) =>
+      Math.max(CAMERA_CONFIG.minZoom, Math.min(CAMERA_CONFIG.maxZoom, value));
 
     const handleWheel = (e: WheelEvent) => {
+      const container = containerRef.current;
+      if (!container) return;
+
       e.preventDefault();
-      
-      // If following, release the follow on zoom
-      if (followingId || isTransitioning) {
-        transitionRef.current = null;
-        setIsTransitioning(false);
-        setFollowingId(null);
+
+      const zoomFactor = e.deltaY > 0 ? 0.88 : 1.12;
+      const currentZoom = cameraRef.current?.zoom ?? CAMERA_CONFIG.minZoom;
+      const nextZoom = clampZoom(currentZoom * zoomFactor);
+      const currentFollowingId = followingIdRef.current;
+
+      if (currentFollowingId && galaxyStateRef.current) {
+        const targetNode = galaxyStateRef.current.nodes.find(n => n.id === currentFollowingId);
+        if (!targetNode) return;
+
+        setTargetZoom(nextZoom);
+        cameraRef.current = {
+          x: -targetNode.x * nextZoom,
+          y: -targetNode.y * nextZoom,
+          zoom: nextZoom,
+        };
+        forceRender();
+        return;
       }
-      
+
       const rect = container.getBoundingClientRect();
-      
-      // Get mouse position relative to viewport center
       const mouseX = e.clientX - rect.left - rect.width / 2;
       const mouseY = e.clientY - rect.top - rect.height / 2;
-      
-      // Smoother zoom factor with smaller steps
-      const zoomFactor = e.deltaY > 0 ? 0.88 : 1.12;
-      
-      setCamera(prev => {
-        const newZoom = Math.max(CAMERA_CONFIG.minZoom, Math.min(CAMERA_CONFIG.maxZoom, prev.zoom * zoomFactor));
-        
-        // ZOOM TO CURSOR: Adjust camera position so point under cursor stays fixed
-        // Before zoom: worldX = (mouseX - camera.x) / oldZoom
-        // After zoom:  worldX = (mouseX - newCamera.x) / newZoom
-        // We want the same worldX, so:
-        // (mouseX - camera.x) / oldZoom = (mouseX - newCamera.x) / newZoom
-        // Solving: newCamera.x = mouseX - (mouseX - camera.x) * (newZoom / oldZoom)
-        
-        const zoomRatio = newZoom / prev.zoom;
-        const newX = mouseX - (mouseX - prev.x) * zoomRatio;
-        const newY = mouseY - (mouseY - prev.y) * zoomRatio;
-        
-        return { x: newX, y: newY, zoom: newZoom };
-      });
-      
-      // Update target zoom for smooth interpolation
-      setTargetZoom(prev => Math.max(CAMERA_CONFIG.minZoom, Math.min(CAMERA_CONFIG.maxZoom, prev * zoomFactor)));
+
+      const prev = cameraRef.current;
+      const prevZoom = prev.zoom || 0.0001;
+      const zoomRatio = nextZoom / prevZoom;
+      const newX = mouseX - (mouseX - prev.x) * zoomRatio;
+      const newY = mouseY - (mouseY - prev.y) * zoomRatio;
+      cameraRef.current = { x: newX, y: newY, zoom: nextZoom };
+      forceRender();
+
+      setTargetZoom(nextZoom);
     };
 
-    container.addEventListener('wheel', handleWheel, { passive: false });
-    return () => container.removeEventListener('wheel', handleWheel);
-  }, [followingId, isTransitioning]);
+    window.addEventListener('wheel', handleWheel, { passive: false });
+    return () => window.removeEventListener('wheel', handleWheel);
+  }, []);
 
   // Drag handling
   const [isDragging, setIsDragging] = useState(false);
@@ -839,14 +1065,15 @@ export default function CryptoPlanets() {
     const dx = e.clientX - lastMousePos.current.x;
     const dy = e.clientY - lastMousePos.current.y;
 
-    setCamera(prev => ({
-      ...prev,
-      x: prev.x + dx,
-      y: prev.y + dy
-    }));
+    cameraRef.current = {
+      ...cameraRef.current,
+      x: cameraRef.current.x + dx,
+      y: cameraRef.current.y + dy,
+    };
+    forceRender();
 
     lastMousePos.current = { x: e.clientX, y: e.clientY };
-  }, [isDragging, followingId, isTransitioning]);
+  }, [isDragging, followingId, isTransitioning, forceRender]);
 
   const handleMouseUp = useCallback(() => setIsDragging(false), []);
 
@@ -886,7 +1113,7 @@ export default function CryptoPlanets() {
       touch.isPinching = true;
       touch.isPanning = false;
       touch.startDistance = getTouchDistance(e.touches);
-      touch.startZoom = camera.zoom;
+      touch.startZoom = cameraRef.current.zoom;
       const center = getTouchCenter(e.touches);
       touch.startX = center.x;
       touch.startY = center.y;
@@ -899,7 +1126,7 @@ export default function CryptoPlanets() {
       touch.lastX = e.touches[0].clientX;
       touch.lastY = e.touches[0].clientY;
     }
-  }, [camera.zoom, getTouchDistance, getTouchCenter]);
+  }, [getTouchDistance, getTouchCenter]);
   
   const handleTouchMove = useCallback((e: React.TouchEvent) => {
     const touch = touchRef.current;
@@ -933,19 +1160,21 @@ export default function CryptoPlanets() {
       const pinchY = touch.startY - rect.top - centerY;
       
       // Zoom to pinch center
-      const zoomRatio = newZoom / camera.zoom;
-      const newCamX = pinchX - (pinchX - camera.x) * zoomRatio;
-      const newCamY = pinchY - (pinchY - camera.y) * zoomRatio;
+      const prevCam = cameraRef.current;
+      const zoomRatio = newZoom / prevCam.zoom;
+      const newCamX = pinchX - (pinchX - prevCam.x) * zoomRatio;
+      const newCamY = pinchY - (pinchY - prevCam.y) * zoomRatio;
       
       // Also apply pan from center movement
       const panX = center.x - touch.lastX;
       const panY = center.y - touch.lastY;
       
-      setCamera({
+      cameraRef.current = {
         x: newCamX + panX,
         y: newCamY + panY,
         zoom: newZoom,
-      });
+      };
+      forceRender();
       
       touch.lastX = center.x;
       touch.lastY = center.y;
@@ -961,16 +1190,17 @@ export default function CryptoPlanets() {
         setFollowingId(null);
       }
       
-      setCamera(prev => ({
-        ...prev,
-        x: prev.x + dx,
-        y: prev.y + dy,
-      }));
+      cameraRef.current = {
+        ...cameraRef.current,
+        x: cameraRef.current.x + dx,
+        y: cameraRef.current.y + dy,
+      };
+      forceRender();
       
       touch.lastX = e.touches[0].clientX;
       touch.lastY = e.touches[0].clientY;
     }
-  }, [camera, followingId, isTransitioning, getTouchDistance, getTouchCenter]);
+  }, [followingId, isTransitioning, getTouchDistance, getTouchCenter, forceRender]);
   
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     const touch = touchRef.current;
@@ -993,6 +1223,8 @@ export default function CryptoPlanets() {
     
     if (!galaxyStateRef.current) return;
 
+    const cameraSnapshot = cameraRef.current;
+
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
 
@@ -1004,8 +1236,8 @@ export default function CryptoPlanets() {
     const centerY = rect.height / 2;
     const screenX = e.clientX - rect.left - centerX;
     const screenY = e.clientY - rect.top - centerY;
-    const worldX = (screenX - camera.x) / camera.zoom;
-    const worldY = (screenY - camera.y) / camera.zoom;
+    const worldX = (screenX - cameraSnapshot.x) / cameraSnapshot.zoom;
+    const worldY = (screenY - cameraSnapshot.y) / cameraSnapshot.zoom;
 
     // Check nodes in order: moons first (smallest), then planets, then sun
     // This ensures smaller overlapping objects get priority
@@ -1016,7 +1248,7 @@ export default function CryptoPlanets() {
     ];
     
     // Minimum hit tolerance for very small objects (in world units)
-    const minHitRadius = 15 / camera.zoom;
+    const minHitRadius = 15 / cameraSnapshot.zoom;
     
     for (const node of allNodes) {
       const dx = worldX - node.x;
@@ -1044,7 +1276,7 @@ export default function CryptoPlanets() {
     
     // Clicked on empty space - close menu if open
     setRadialMenu(prev => ({ ...prev, isOpen: false }));
-  }, [camera]);
+  }, []);
 
   // Radial menu items
   const getRadialMenuItems = useCallback(() => {
@@ -1120,7 +1352,7 @@ export default function CryptoPlanets() {
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
     >
-      <Starfield />
+      <Starfield qualityMode={qualityMode} />
 
       {/* Galaxy container with camera shake */}
       <div
@@ -1180,6 +1412,8 @@ export default function CryptoPlanets() {
           followingId={followingId}
           onFollowPlanet={handleFollowPlanet}
           zoom={camera.zoom}
+          qualityMode={qualityMode}
+          qualityReasons={qualityReasons}
         />
       )}
       
@@ -1207,6 +1441,8 @@ export default function CryptoPlanets() {
           onToggleStables={() => setHideStables(!hideStables)}
           onToggleWrapped={() => setHideWrapped(!hideWrapped)}
           followingInfo={followingInfo}
+          qualityMode={qualityMode}
+          qualityReasons={qualityReasons}
         />
       )}
 
@@ -1225,15 +1461,99 @@ export default function CryptoPlanets() {
       {/* UI Overlay (Desktop only) */}
       {!isMobile && (
         <div className="absolute top-0 left-0 w-full h-full pointer-events-none p-6 flex flex-col justify-between z-40">
-          <div className="flex items-start justify-between">
-            <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 ml-48">
-              <h1 className="text-2xl font-bold text-white mb-2">Crypto Galaxy</h1>
-              <p className="text-sm text-white/60">Real-time blockchain visualization</p>
+          <div className="flex flex-col gap-4">
+            <div className="flex items-start gap-6">
+              <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 ml-48">
+                <h1 className="text-2xl font-bold text-white mb-2">Crypto Galaxy</h1>
+                <p className="text-sm text-white/60">Real-time blockchain visualization</p>
+              </div>
+
+              <div className="ml-auto flex flex-col items-end gap-3">
+                <select
+                  className="pointer-events-auto bg-black/60 backdrop-blur-md border border-white/10 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-black/80 transition-colors min-w-[230px] text-sm font-semibold shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40"
+                  value={weightMode}
+                  onChange={(e) => {
+                    const newMode = e.target.value as WeightMode;
+                    setWeightMode(newMode);
+                    
+                    // Update URL with metric param
+                    const url = new URL(window.location.href);
+                    if (newMode !== 'MarketCap') {
+                      url.searchParams.set('metric', newMode);
+                    } else {
+                      url.searchParams.delete('metric');
+                    }
+                    window.history.replaceState({}, '', url.toString());
+                  }}
+                >
+                  <option value="TVL"> TVL</option>
+                  <option value="MarketCap">Size by Market Cap</option>
+                  <option value="Volume24h">Size by 24h Volume</option>
+                  <option value="Change24h">Size by 24h Change</option>
+                </select>
+
+                <div className="flex gap-2 pointer-events-auto flex-wrap justify-end">
+                  <button
+                    onClick={() => setHideStables(!hideStables)}
+                    aria-pressed={!hideStables}
+                    className={`group flex items-center gap-3 px-3 py-2 rounded-2xl border text-xs font-semibold tracking-wide uppercase transition-all shadow-sm ${
+                      hideStables
+                        ? 'bg-black/40 border-red-400/40 text-red-200 hover:border-red-300'
+                        : 'bg-emerald-500/15 border-emerald-400/40 text-emerald-100 hover:border-emerald-300'
+                    }`}
+                    title={hideStables ? 'Stablecoins hidden - click to show' : 'Stablecoins visible - click to hide'}
+                  >
+                    <span className={`w-3 h-3 rounded-full ${hideStables ? 'bg-red-400 animate-pulse' : 'bg-emerald-300'}`} />
+                    <span className="flex flex-col leading-tight text-left">
+                      <span className="text-[10px] text-white/60 tracking-[0.3em]">STABLES</span>
+                      <span className="text-[11px]">
+                        {hideStables ? 'Hidden' : 'Visible'}
+                      </span>
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => setHideWrapped(!hideWrapped)}
+                    aria-pressed={!hideWrapped}
+                    className={`group flex items-center gap-3 px-3 py-2 rounded-2xl border text-xs font-semibold tracking-wide uppercase transition-all shadow-sm ${
+                      hideWrapped
+                        ? 'bg-black/40 border-red-400/40 text-red-200 hover:border-red-300'
+                        : 'bg-cyan-500/15 border-cyan-400/40 text-cyan-100 hover:border-cyan-300'
+                    }`}
+                    title={hideWrapped ? 'Wrapped tokens hidden - click to show' : 'Wrapped tokens visible - click to hide'}
+                  >
+                    <span className={`w-3 h-3 rounded-full ${hideWrapped ? 'bg-red-400 animate-pulse' : 'bg-cyan-300'}`} />
+                    <span className="flex flex-col leading-tight text-left">
+                      <span className="text-[10px] text-white/60 tracking-[0.3em]">WRAPPED</span>
+                      <span className="text-[11px]">
+                        {hideWrapped ? 'Hidden' : 'Visible'}
+                      </span>
+                    </span>
+                  </button>
+
+                  <button
+                    onClick={() => setShowPerfOverlay(prev => !prev)}
+                    className={`flex items-center gap-3 px-3 py-2 rounded-2xl border text-xs font-semibold tracking-wide uppercase transition-all shadow-sm ${
+                      showPerfOverlay
+                        ? 'bg-blue-500/15 border-blue-400/40 text-blue-100 hover:border-blue-300'
+                        : 'bg-white/5 border-white/20 text-white/70 hover:border-white/40'
+                    }`}
+                    title="Toggle performance overlay"
+                  >
+                    <span className={`w-3 h-3 rounded-full ${showPerfOverlay ? 'bg-blue-300 animate-pulse' : 'bg-white/40'}`} />
+                    <span className="flex flex-col leading-tight text-left">
+                      <span className="text-[10px] text-white/60 tracking-[0.3em]">PERF</span>
+                      <span className="text-[11px]">
+                        {showPerfOverlay ? 'Enabled' : 'Disabled'}
+                      </span>
+                    </span>
+                  </button>
+                </div>
+              </div>
             </div>
 
-            {/* Prominent Following Indicator - Center Top */}
             {followingInfo && (
-              <div className={`absolute top-6 left-1/2 -translate-x-1/2 backdrop-blur-md rounded-full px-6 py-2 border flex items-center gap-3 transition-all duration-300 ${
+              <div className={`self-center backdrop-blur-md rounded-full px-6 py-2 border flex items-center gap-3 transition-all duration-300 ${
                 isTransitioning 
                   ? 'bg-purple-500/20 border-purple-400/50' 
                   : 'bg-cyan-500/20 border-cyan-400/50'
@@ -1246,15 +1566,14 @@ export default function CryptoPlanets() {
                 }`}>
                   {isTransitioning ? 'Navigating to: ' : 'Following: '}{followingInfo.symbol}
                 </span>
-                
-                {/* Copy Link Button */}
+
                 <button
                   onClick={() => {
                     navigator.clipboard.writeText(window.location.href);
                     setLinkCopied(true);
                     setTimeout(() => setLinkCopied(false), 2000);
                   }}
-                  className="pointer-events-auto text-cyan-400/60 hover:text-green-400 transition-colors text-xs flex items-center gap-1"
+                  className="pointer-events-auto text-cyan-400/70 hover:text-green-400 transition-colors text-xs flex items-center gap-1"
                   title="Copy shareable link"
                 >
                   {linkCopied ? (
@@ -1265,65 +1584,16 @@ export default function CryptoPlanets() {
                     </svg>
                   )}
                 </button>
-                
+
                 <button
                   onClick={() => handleFollowPlanet(null)}
-                  className="pointer-events-auto text-cyan-400/60 hover:text-red-400 transition-colors ml-1 text-xs"
+                  className="pointer-events-auto text-cyan-400/70 hover:text-red-400 transition-colors ml-1 text-xs"
                   title="Release follow"
                 >
                   ✕
                 </button>
               </div>
             )}
-
-            <select
-              className="pointer-events-auto bg-black/50 backdrop-blur-md border border-white/10 text-white px-4 py-2 rounded-lg cursor-pointer hover:bg-black/70 transition-colors"
-              value={weightMode}
-              onChange={(e) => {
-                const newMode = e.target.value as WeightMode;
-                setWeightMode(newMode);
-                
-                // Update URL with metric param
-                const url = new URL(window.location.href);
-                if (newMode !== 'MarketCap') {
-                  url.searchParams.set('metric', newMode);
-                } else {
-                  url.searchParams.delete('metric');
-                }
-                window.history.replaceState({}, '', url.toString());
-              }}
-            >
-              <option value="TVL"> TVL</option>
-              <option value="MarketCap">Size by Market Cap</option>
-              <option value="Volume24h">Size by 24h Volume</option>
-              <option value="Change24h">Size by 24h Change</option>
-            </select>
-            
-            {/* Token Filter Toggles */}
-            <div className="flex gap-2 pointer-events-auto">
-              <button
-                onClick={() => setHideStables(!hideStables)}
-                className={`px-3 py-2 rounded-lg text-xs font-medium transition-all backdrop-blur-md border ${
-                  hideStables 
-                    ? 'bg-red-500/20 border-red-400/30 text-red-300' 
-                    : 'bg-green-500/20 border-green-400/30 text-green-300'
-                }`}
-                title={hideStables ? "Stablecoins hidden - click to show" : "Stablecoins visible - click to hide"}
-              >
-                {hideStables ? '🚫' : '✅'} Stables
-              </button>
-              <button
-                onClick={() => setHideWrapped(!hideWrapped)}
-                className={`px-3 py-2 rounded-lg text-xs font-medium transition-all backdrop-blur-md border ${
-                  hideWrapped 
-                    ? 'bg-red-500/20 border-red-400/30 text-red-300' 
-                    : 'bg-green-500/20 border-green-400/30 text-green-300'
-                }`}
-                title={hideWrapped ? "Wrapped tokens hidden - click to show" : "Wrapped tokens visible - click to hide"}
-              >
-                {hideWrapped ? '🚫' : '✅'} Wrapped
-              </button>
-            </div>
           </div>
 
           <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 max-w-xs ml-48">
@@ -1358,6 +1628,25 @@ export default function CryptoPlanets() {
 
       {/* Footer (Desktop only) */}
       {!isMobile && <Footer />}
+
+      {showPerfOverlay && !isMobile && (
+        <div className="fixed bottom-6 right-6 z-50 pointer-events-none">
+          <div className="bg-black/70 text-white rounded-2xl px-5 py-4 border border-white/20 shadow-2xl w-64">
+            <div className="text-xs uppercase tracking-[0.3em] text-white/50 mb-2">Performance</div>
+            <div className="space-y-1 text-sm">
+              <div className="flex justify-between"><span>FPS</span><span>{perfStats.fps.toFixed(1)}</span></div>
+              <div className="flex justify-between"><span>Nodes</span><span>{perfStats.nodes}</span></div>
+              <div className="flex justify-between"><span>Particles</span><span>{perfStats.particles}</span></div>
+              <div className="flex justify-between"><span>Physics (ms)</span><span>{perfStats.physicsMs.toFixed(2)}</span></div>
+              <div className="flex justify-between"><span>Camera (ms)</span><span>{perfStats.cameraMs.toFixed(2)}</span></div>
+            </div>
+            <div className="mt-3 text-[11px] text-white/50 border-t border-white/10 pt-2 flex justify-between">
+              <span>{deviceInfo.cores ? `${deviceInfo.cores} cores` : 'cores n/a'}</span>
+              <span>{deviceInfo.dpr ? `dpr ${deviceInfo.dpr.toFixed(1)}` : ''}</span>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

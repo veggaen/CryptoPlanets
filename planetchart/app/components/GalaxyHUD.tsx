@@ -2,6 +2,7 @@
 
 import { memo } from "react";
 import type { GalaxyNode } from "@/types/galaxy";
+import type { QualityMode } from "@/types/performance";
 
 interface GalaxyHUDProps {
   planets: GalaxyNode[];
@@ -9,13 +10,15 @@ interface GalaxyHUDProps {
   followingId: string | null;
   onFollowPlanet: (nodeId: string | null) => void;
   zoom: number;
+  qualityMode: QualityMode;
+  qualityReasons: string[];
 }
 
 /**
  * GalaxyHUD - Futuristic navigation bar for chain selection
  * Displays glowing buttons for each chain (planet) in the galaxy
  */
-const GalaxyHUD = memo(({ planets, sun, followingId, onFollowPlanet, zoom }: GalaxyHUDProps) => {
+const GalaxyHUD = memo(({ planets, sun, followingId, onFollowPlanet, zoom, qualityMode, qualityReasons }: GalaxyHUDProps) => {
   // Get all navigable nodes (sun + planets)
   const allNodes = [sun, ...planets];
 
@@ -27,6 +30,18 @@ const GalaxyHUD = memo(({ planets, sun, followingId, onFollowPlanet, zoom }: Gal
         <div className="text-[10px] uppercase tracking-widest text-white/40 text-center mb-1 font-medium">
           Navigate
         </div>
+
+        {qualityMode === 'lite' && (
+          <div className="mb-1 p-2 rounded-xl bg-amber-500/10 border border-amber-400/30 text-amber-100/90">
+            <div className="text-[10px] uppercase tracking-[0.3em] text-amber-200 font-semibold">Lite Mode</div>
+            {qualityReasons.length > 0 && (
+              <div className="text-[10px] text-amber-100/80 mt-0.5">
+                {qualityReasons[0]}
+                {qualityReasons.length > 1 ? ` +${qualityReasons.length - 1} more` : ''}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Chain Buttons */}
         {allNodes.map((node) => {

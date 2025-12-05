@@ -1,6 +1,6 @@
 // Phase 2: Full Collision Detection & Response
 // Hard collisions with proper physics - no overlap allowed!
-// Includes SUPERNOVA EVENTS: 25% chance on moon-moon collision to eject both into space
+// Supernova ejection system DISABLED for stability – collisions stay local
 
 import type { GalaxyNode } from "@/types/galaxy";
 
@@ -11,37 +11,55 @@ import type { GalaxyNode } from "@/types/galaxy";
 export const collisionConfig = {
     // Physics - TRUE BOWLING BALL MOMENTUM TRANSFER!
     // When balls collide, momentum is conserved: m1*v1 + m2*v2 = m1*v1' + m2*v2'
-    restitution: 0.95,           // Slight energy loss (0.95 = 95% energy retained)
-    damping: 0.995,              // Very minimal damping - balls keep rolling
-    minSeparation: 8,            // Bit more gap to prevent sticky collisions
+    restitution: 0.78,           // Slight bounce for realistic energy trade
+    damping: 0.985,              // Legacy value (kept for compatibility)
+    minSeparation: 12,           // More gap to prevent sticky collisions
     
     // Momentum transfer settings
     momentumTransferRatio: 1.0,  // 1.0 = perfect momentum transfer (bowling ball)
-    massExponent: 0.8,           // How much mass affects collision (lower = more equal)
+    massExponent: 0.7,           // How much mass affects collision (lower = more equal)
     
     // Thresholds
-    grazingSpeedThreshold: 40,   // Below this = gentle touch, above = impact
-    supernovaSpeedThreshold: 180, // Above this = full supernova effect
+    grazingSpeedThreshold: 30,   // Below this = gentle touch, above = impact
+    supernovaSpeedThreshold: 150, // Legacy (no longer used)
     
-    // Supernova Event - sends moons on 1-3 orbits around the sun!
-    supernovaCooldownMs: 60000,  // 1 minute between supernovas
-    supernovaEventChance: 0.15,  // 15% chance per collision when cooldown ready
-    supernovaEjectSpeed: 1200,   // VERY HIGH - sends moons toward sun
-    supernovaEjectSpeedVariance: 600, // Big variance for drama
-    supernovaReturnRate: 0.001,  // EXTREMELY slow return - 1-3 sun orbits
-    supernovaMinSpeed: 5,        // Any collision can trigger
-    supernovaMaxDistance: 80000, // Can travel very far (toward sun)
+    // Supernova Event (DISABLED)
+    supernovaCooldownMs: 0,
+    supernovaEventChance: 0,
+    supernovaEjectSpeed: 0,
+    supernovaEjectSpeedVariance: 0,
+    supernovaReturnRate: 0,
+    supernovaMinSpeed: 0,
+    supernovaMaxDistance: 80000,
+    
+    // PROXIMITY GLOW - shine when moons approach each other (before collision!)
+    proximityGlowDistance: 400,  // Start glowing when this close (px)
+    proximityGlowIntensity: 0.6, // Max proximity glow (0-1)
     
     // Particles
-    maxParticles: 200,           // Performance cap
+    maxParticles: 250,           // Performance cap
     sparkLifetime: 0.6,          // seconds
     smokeLifetime: 2.0,          // seconds
     
     // Visual feedback
-    glowDecay: 0.95,             // How fast glow fades per frame
+    glowDecay: 0.93,             // How fast glow fades per frame (slower decay)
     maxGlow: 1.0,
     shakeIntensity: 8,           // Max camera shake pixels
     shakeDuration: 300,          // ms
+
+    // Rail breakouts
+    freeOrbitDuration: 90,       // Frames spent coasting after a collision (~1.5s)
+    freeOrbitSpring: 0.013,      // Gentle radial pull back toward orbit band
+    freeOrbitDamping: 0.975,     // Faster bleed to tame springbacks
+    freeOrbitOrbitAssist: 0.18,  // Tangential boost to keep circular motion alive
+    tangentialJitter: 0.08,      // Subtle randomness, no more soccer passes
+    slotReleaseDuration: 40,     // Extra frames where angular clamp is loosened
+    tangentialFriction: 0.4,     // How much side-slip is reduced per impact
+    maxFreeSpeed: 240,           // Clamp runaway velocity from stacked impulses
+    globalVelocityDrag: 0.995,   // Air drag applied each frame to free bodies
+    freeOrbitSpringRamp: 0.25,   // 0-1: ramp spring strength across free-flight lifetime
+    railBlendDuration: 45,       // Frames for smooth return to deterministic orbit
+    railBlendEase: 0.15,         // How fast we ease toward the rail during blend
 } as const;
 
 // ============================================================================
@@ -59,125 +77,28 @@ export type FlungMoon = {
     returnProgress: number;      // 0-1, how close to orbit
 };
 
-// Track all currently flung moons
+// Track all currently flung moons (legacy, now unused)
 const flungMoons = new Map<string, FlungMoon>();
 
-// Track last supernova time for cooldown
-let lastSupernovaTime = 0;
-
-/**
- * Check if supernova is allowed (respects cooldown)
- */
-function canTriggerSupernova(): boolean {
-    const now = Date.now();
-    const cooldown = collisionConfig.supernovaCooldownMs || 120000;
-    return (now - lastSupernovaTime) >= cooldown;
-}
-
-/**
- * Mark supernova as triggered (reset cooldown)
- */
-function markSupernovaTriggered(): void {
-    lastSupernovaTime = Date.now();
-}
-
-/**
- * Check if a moon is currently flung (in supernova ejection)
- */
-export function isMoonFlung(nodeId: string): boolean {
-    return flungMoons.has(nodeId);
-}
-
-/**
- * Get flung state for a moon (if flung)
- */
-export function getFlungState(nodeId: string): FlungMoon | undefined {
-    return flungMoons.get(nodeId);
-}
-
-/**
- * Get all currently flung moons
- */
-export function getAllFlungMoons(): FlungMoon[] {
-    return Array.from(flungMoons.values());
-}
+// Supernova helpers are now no-ops – system disabled for stability
+function canTriggerSupernova(): boolean { return false; }
+function markSupernovaTriggered(): void { /* no-op */ }
+export function isMoonFlung(_nodeId: string): boolean { return false; }
+export function getFlungState(_nodeId: string): FlungMoon | undefined { return undefined; }
+export function getAllFlungMoons(): FlungMoon[] { return []; }
 
 /**
  * Trigger a supernova ejection event for two colliding moons
  * Sends moons flying outward - potentially all the way to sun's orbit!
  */
 export function triggerSupernovaEjection(
-    moonA: GalaxyNode, 
-    moonB: GalaxyNode, 
-    impactPoint: { x: number; y: number },
-    baseRadiusA: number,
-    baseRadiusB: number
+    _moonA: GalaxyNode, 
+    _moonB: GalaxyNode, 
+    _impactPoint: { x: number; y: number },
+    _baseRadiusA: number,
+    _baseRadiusB: number
 ): void {
-    // Mark supernova triggered for cooldown
-    markSupernovaTriggered();
-    
-    // Calculate direction TOWARD the sun (center) with some randomness
-    // One moon goes toward sun, one goes opposite direction
-    const sunAngleA = Math.atan2(-moonA.y, -moonA.x); // Angle toward center (sun)
-    const sunAngleB = Math.atan2(-moonB.y, -moonB.x);
-    
-    // Add randomness: mostly toward/away from sun but with spread
-    const randomSpread = Math.PI * 0.4; // 72 degrees of randomness
-    const angleA = sunAngleA + (Math.random() - 0.5) * randomSpread;
-    const angleB = sunAngleB + Math.PI + (Math.random() - 0.5) * randomSpread; // Opposite direction
-    
-    // Random speeds - one might go much faster than the other
-    const speedA = collisionConfig.supernovaEjectSpeed + 
-        (Math.random() * collisionConfig.supernovaEjectSpeedVariance);
-    const speedB = collisionConfig.supernovaEjectSpeed * 0.7 + 
-        (Math.random() * collisionConfig.supernovaEjectSpeedVariance * 0.7);
-    
-    // Register both moons as flung with trajectory toward/away from sun
-    flungMoons.set(moonA.id, {
-        nodeId: moonA.id,
-        parentChainId: moonA.parentId || '',
-        baseOrbitRadius: baseRadiusA,
-        ejectVx: Math.cos(angleA) * speedA,
-        ejectVy: Math.sin(angleA) * speedA,
-        ejectTime: Date.now(),
-        phase: 'ejecting',
-        returnProgress: 0,
-    });
-    
-    flungMoons.set(moonB.id, {
-        nodeId: moonB.id,
-        parentChainId: moonB.parentId || '',
-        baseOrbitRadius: baseRadiusB,
-        ejectVx: Math.cos(angleB) * speedB,
-        ejectVy: Math.sin(angleB) * speedB,
-        ejectTime: Date.now(),
-        phase: 'ejecting',
-        returnProgress: 0,
-    });
-    
-    // Apply initial velocity to nodes
-    moonA.vx = Math.cos(angleA) * speedA;
-    moonA.vy = Math.sin(angleA) * speedA;
-    moonB.vx = Math.cos(angleB) * speedB;
-    moonB.vy = Math.sin(angleB) * speedB;
-    
-    // Spawn MASSIVE supernova particles - extra dramatic!
-    spawnSupernovaExplosion(impactPoint, moonA.color, moonB.color);
-    
-    // Max glow on both moons - they're on fire!
-    moonA.collisionGlow = 1.0;
-    moonB.collisionGlow = 1.0;
-    
-    // Spawn the supernova explosion effect
-    spawnSupernovaExplosion(impactPoint, moonA.color, moonB.color);
-    
-    // Max glow on both moons - they're on fire!
-    moonA.collisionGlow = 1.0;
-    moonB.collisionGlow = 1.0;
-    
-    // NO camera shake - user preference
-    
-    console.log(`🌟 SUPERNOVA! Moons ${moonA.id} and ${moonB.id} sent flying!`);
+    // Supernova ejection disabled – keep moons in local orbits
 }
 
 /**
@@ -189,6 +110,7 @@ export function updateFlungMoons(nodes: GalaxyNode[], dt: number): void {
     const sun = nodes.find(n => n.type === 'sun');
     const planets = nodes.filter(n => n.type === 'planet');
     
+    // With supernova disabled, immediately clear any legacy flung state
     for (const [nodeId, flung] of flungMoons.entries()) {
         const moon = nodes.find(n => n.id === nodeId);
         if (!moon) {
@@ -559,6 +481,22 @@ export type Particle = {
 
 // Global particle pool
 let particles: Particle[] = [];
+let activeParticleCap = collisionConfig.maxParticles;
+
+/**
+ * Update particle budget at runtime based on quality mode
+ */
+export function setParticleBudget(maxParticles: number): void {
+    const clamped = Math.max(25, Math.min(maxParticles, collisionConfig.maxParticles));
+    activeParticleCap = clamped;
+    if (particles.length > activeParticleCap) {
+        particles = particles.slice(particles.length - activeParticleCap);
+    }
+}
+
+export function getParticleBudget(): number {
+    return activeParticleCap;
+}
 
 /**
  * Spawn particles at a collision point
@@ -578,7 +516,7 @@ export function spawnParticles(options: {
     const { count, pos, speed, life, colors, size, gravity = 0, angleSpread, direction, type } = options;
     
     for (let i = 0; i < count; i++) {
-        if (particles.length >= collisionConfig.maxParticles) {
+        if (particles.length >= activeParticleCap) {
             // Remove oldest particle
             particles.shift();
         }
@@ -712,6 +650,29 @@ export function areNodesColliding(n1: GalaxyNode, n2: GalaxyNode): boolean {
 }
 
 /**
+ * Calculate effective orbital velocity for a node
+ * Used for collision physics when node is in calm orbit (vx=0, vy=0)
+ */
+function getEffectiveVelocity(node: GalaxyNode): { vx: number; vy: number } {
+    // If node already has velocity (from collision), use it
+    const currentSpeed = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
+    if (currentSpeed > 0.5) {
+        return { vx: node.vx, vy: node.vy };
+    }
+    
+    // Calculate orbital velocity: v = r * ω (radius * angular velocity)
+    // Direction is tangent to orbit (perpendicular to radius)
+    // REDUCED multiplier from 0.8 to 0.3 to prevent explosion velocities
+    const orbitSpeed = (node.orbitRadius || 100) * Math.abs(node.angularVelocity || 0.001) * 0.3;
+    const tangentAngle = (node.orbitAngle || 0) + Math.PI / 2 * Math.sign(node.angularVelocity || 1);
+    
+    return {
+        vx: Math.cos(tangentAngle) * orbitSpeed,
+        vy: Math.sin(tangentAngle) * orbitSpeed,
+    };
+}
+
+/**
  * Resolve collision between two nodes with TRUE BOWLING BALL PHYSICS
  * Uses proper momentum conservation: m1*v1 + m2*v2 = m1*v1' + m2*v2'
  * Returns true if collision occurred
@@ -734,30 +695,52 @@ export function resolveCollision(a: GalaxyNode, b: GalaxyNode): CollisionResult 
     
     // Calculate overlap amount
     const overlap = sumRadii + collisionConfig.minSeparation - dist;
-    
-    // === BOWLING BALL PHYSICS: Proper mass-based momentum transfer ===
-    // Use mass with exponent to allow smaller moons to still transfer momentum
     const massExponent = collisionConfig.massExponent;
-    const aMass = Math.pow(a.mass, massExponent);
-    const bMass = Math.pow(b.mass, massExponent);
+    const aMass = Math.pow(a.mass || 10, massExponent);
+    const bMass = Math.pow(b.mass || 10, massExponent);
     const totalMass = aMass + bMass;
+    const aRatio = bMass / (totalMass || 1);
+    const bRatio = aMass / (totalMass || 1);
+    const physMassA = Math.max(a.mass || 10, 1);
+    const physMassB = Math.max(b.mass || 10, 1);
+
+    // Determine relative order along orbit to pick push direction
+    const angleDelta = shortestAngleDiff(b.orbitAngle, a.orbitAngle);
+    const directionA = angleDelta >= 0 ? -1 : 1; // push A opposite of B
+    const directionB = -directionA;
+
+    // Convert overlap distance into angular push (arc length = r * angle)
+    const arcPush = overlap * 0.65 + 6;
+    applyAngularPush(a, directionA * arcPush * aRatio);
+    applyAngularPush(b, directionB * arcPush * bRatio);
+
+    // Pull overlapping bodies apart immediately to avoid sticking
+    separateNodes(a, b, nx, ny, overlap, physMassA, physMassB);
+
+    // If moons share same parent ring, nudge lighter one outward to avoid stacking
+    if (a.type === 'moon' && b.type === 'moon' && a.parentId === b.parentId) {
+        const lighter = aMass <= bMass ? a : b;
+        const heavier = lighter === a ? b : a;
+        const radialNudge = overlap * 0.35;
+        if (typeof lighter.targetOrbitRadius !== 'number') lighter.targetOrbitRadius = lighter.orbitRadius;
+        lighter.targetOrbitRadius += radialNudge;
+        clampTargetOrbitToField(lighter);
+        if (typeof heavier.targetOrbitRadius !== 'number') heavier.targetOrbitRadius = heavier.orbitRadius;
+        heavier.targetOrbitRadius -= radialNudge * 0.2;
+        clampTargetOrbitToField(heavier);
+    }
+
+    // Get EFFECTIVE velocities (orbital motion for calm moons)
+    const aVel = getEffectiveVelocity(a);
+    const bVel = getEffectiveVelocity(b);
+
+    applyFreeOrbitImpulse(a, b, { x: nx, y: ny }, overlap, aVel, bVel, physMassA, physMassB);
     
-    // Mass-based separation (heavier objects move less)
-    const aRatio = bMass / totalMass;
-    const bRatio = aMass / totalMass;
+    // Calculate relative velocity using effective velocities
+    const relVx = bVel.vx - aVel.vx;
+    const relVy = bVel.vy - aVel.vy;
     
-    // Separate them so they just touch (no overlap ever!)
-    a.x -= nx * overlap * aRatio;
-    a.y -= ny * overlap * aRatio;
-    b.x += nx * overlap * bRatio;
-    b.y += ny * overlap * bRatio;
-    
-    // Calculate relative velocity
-    const relVx = b.vx - a.vx;
-    const relVy = b.vy - a.vy;
-    const relVelAlongNormal = relVx * nx + relVy * ny;
-    
-    // Calculate impact speed for effects (before checking direction)
+    // Calculate impact speed for effects
     const impactSpeed = Math.sqrt(relVx * relVx + relVy * relVy);
     
     // Calculate impact point (on the surface of a, toward b)
@@ -766,58 +749,9 @@ export function resolveCollision(a: GalaxyNode, b: GalaxyNode): CollisionResult 
         y: a.y + ny * a.radius,
     };
     
-    // Only apply velocity change if objects are approaching
-    if (relVelAlongNormal < 0) {
-        // === TRUE MOMENTUM CONSERVATION ===
-        // For elastic collision: v1' = ((m1-m2)*v1 + 2*m2*v2) / (m1+m2)
-        // For 1D along normal: 
-        // v1n' = ((m1-m2)*v1n + 2*m2*v2n) / (m1+m2)
-        // v2n' = ((m2-m1)*v2n + 2*m1*v1n) / (m1+m2)
-        
-        const { restitution, momentumTransferRatio } = collisionConfig;
-        
-        // Get velocity components along normal
-        const v1n = a.vx * nx + a.vy * ny;  // a's velocity along normal
-        const v2n = b.vx * nx + b.vy * ny;  // b's velocity along normal
-        
-        // Get velocity components perpendicular to normal (tangent)
-        const v1t = a.vx - v1n * nx;
-        const v1ty = a.vy - v1n * ny;
-        const v2t = b.vx - v2n * nx;
-        const v2ty = b.vy - v2n * ny;
-        
-        // Calculate new normal velocities using momentum conservation
-        // With restitution for energy loss
-        const m1 = aMass;
-        const m2 = bMass;
-        
-        const v1nNew = ((m1 - m2) * v1n + 2 * m2 * v2n) / (m1 + m2) * restitution;
-        const v2nNew = ((m2 - m1) * v2n + 2 * m1 * v1n) / (m1 + m2) * restitution;
-        
-        // Apply momentum transfer ratio (1.0 = full transfer, 0.5 = half)
-        const transfer = momentumTransferRatio;
-        
-        // New velocities = tangent (unchanged) + new normal component
-        a.vx = v1t + v1nNew * nx * transfer;
-        a.vy = v1ty + v1nNew * ny * transfer;
-        b.vx = v2t + v2nNew * nx * transfer;
-        b.vy = v2ty + v2nNew * ny * transfer;
-        
-        // Ensure minimum bounce velocity so collisions are visible
-        const minBounce = 1.5;
-        const aSpeed = Math.sqrt(a.vx * a.vx + a.vy * a.vy);
-        const bSpeed = Math.sqrt(b.vx * b.vx + b.vy * b.vy);
-        
-        if (aSpeed < minBounce && impactSpeed > 0.5) {
-            // Give small kick in opposite direction of collision
-            a.vx = -nx * minBounce * (0.8 + Math.random() * 0.4);
-            a.vy = -ny * minBounce * (0.8 + Math.random() * 0.4);
-        }
-        if (bSpeed < minBounce && impactSpeed > 0.5) {
-            b.vx = nx * minBounce * (0.8 + Math.random() * 0.4);
-            b.vy = ny * minBounce * (0.8 + Math.random() * 0.4);
-        }
-    }
+    // Visual glow effect
+    a.collisionGlow = Math.min(collisionConfig.maxGlow, (a.collisionGlow || 0) + 0.6);
+    b.collisionGlow = Math.min(collisionConfig.maxGlow, (b.collisionGlow || 0) + 0.6);
     
     return {
         occurred: true,
@@ -827,6 +761,214 @@ export function resolveCollision(a: GalaxyNode, b: GalaxyNode): CollisionResult 
         nodeA: a,
         nodeB: b,
     };
+}
+
+function applyAngularPush(node: GalaxyNode, pushDistance: number) {
+    if (node.type !== 'moon' && node.type !== 'meteorite') {
+        return;
+    }
+    if ((node.freeOrbitTimer ?? 0) > 0) {
+        // Don't fight active free-flight motion
+        return;
+    }
+    const radius = Math.max(node.orbitRadius || 1, 1);
+    const angleDelta = pushDistance / radius;
+
+    const baseAngle = node.baseOrbitAngle ?? node.targetOrbitAngle ?? node.orbitAngle;
+    const currentTarget = node.targetOrbitAngle ?? node.orbitAngle;
+    const newTarget = normalizeAngle(currentTarget + angleDelta);
+    const rawOffset = shortestAngleDiff(newTarget, baseAngle);
+    const baseClamp = 0.45;
+    let clampMultiplier = baseClamp;
+    if (node.slotReleaseTimer && node.slotReleaseTimer > 0 && collisionConfig.slotReleaseDuration > 0) {
+        const duration = collisionConfig.slotReleaseDuration;
+        const releaseT = clamp(node.slotReleaseTimer / duration, 0, 1);
+        clampMultiplier = baseClamp + releaseT * 0.75; // expand up to ~1.2x slot span
+    }
+    const slotLimit = (node.slotSpan ?? (Math.PI / 4)) * clampMultiplier;
+    const clampedOffset = clamp(rawOffset, -slotLimit, slotLimit);
+    node.angleOffset = clampedOffset;
+    node.targetOrbitAngle = normalizeAngle(baseAngle + clampedOffset);
+}
+
+function normalizeAngle(angle: number): number {
+    const twoPi = Math.PI * 2;
+    let result = angle % twoPi;
+    if (result < 0) result += twoPi;
+    return result;
+}
+
+function shortestAngleDiff(target: number, current: number): number {
+    const twoPi = Math.PI * 2;
+    let diff = (target - current) % twoPi;
+    if (diff > Math.PI) diff -= twoPi;
+    if (diff < -Math.PI) diff += twoPi;
+    return diff;
+}
+
+function clamp(value: number, min: number, max: number): number {
+    if (value < min) return min;
+    if (value > max) return max;
+    return value;
+}
+
+type FieldBounds = {
+    inner: number;
+    outer: number;
+};
+
+function getNodeFieldBounds(node: GalaxyNode): FieldBounds | null {
+    if (typeof node.fieldInnerRadius !== 'number' || typeof node.fieldOuterRadius !== 'number') {
+        return null;
+    }
+    const inner = Math.min(node.fieldInnerRadius, node.fieldOuterRadius);
+    const outer = Math.max(node.fieldInnerRadius, node.fieldOuterRadius);
+    if (!isFinite(inner) || !isFinite(outer)) {
+        return null;
+    }
+    return { inner, outer };
+}
+
+function clampRadiusToField(node: GalaxyNode, value: number): number {
+    const bounds = getNodeFieldBounds(node);
+    if (!bounds) return value;
+    return clamp(value, bounds.inner, bounds.outer);
+}
+
+function clampTargetOrbitToField(node: GalaxyNode): void {
+    if (typeof node.targetOrbitRadius !== 'number') return;
+    node.targetOrbitRadius = clampRadiusToField(node, node.targetOrbitRadius);
+}
+
+function clampVelocity(node: GalaxyNode) {
+    const maxSpeed = collisionConfig.maxFreeSpeed;
+    if (!maxSpeed || maxSpeed <= 0) return;
+    const speed = Math.hypot(node.vx, node.vy);
+    if (speed > maxSpeed) {
+        const scale = maxSpeed / speed;
+        node.vx *= scale;
+        node.vy *= scale;
+    }
+}
+
+function enableFreeOrbit(node: GalaxyNode) {
+    if (node.type !== 'moon' && node.type !== 'meteorite') return;
+    const baseDuration = collisionConfig.freeOrbitDuration;
+    const randomBoost = baseDuration * (0.5 + Math.random() * 0.5);
+    node.freeOrbitTimer = Math.max(node.freeOrbitTimer ?? 0, randomBoost);
+    node.freeOrbitDurationTotal = Math.max(node.freeOrbitDurationTotal ?? 0, node.freeOrbitTimer);
+    node.freeOrbitAnchorRadius = clampRadiusToField(node, node.orbitRadius);
+    node.freeOrbitAnchorAngle = node.orbitAngle;
+    node.railBlendTimer = 0;
+    const slotDuration = collisionConfig.slotReleaseDuration;
+    if (slotDuration > 0) {
+        node.slotReleaseTimer = Math.max(node.slotReleaseTimer ?? 0, slotDuration + Math.random() * slotDuration * 0.5);
+    }
+}
+
+function separateNodes(
+    a: GalaxyNode,
+    b: GalaxyNode,
+    nx: number,
+    ny: number,
+    overlap: number,
+    massA: number,
+    massB: number
+) {
+    const invMassA = 1 / Math.max(massA, 1);
+    const invMassB = 1 / Math.max(massB, 1);
+    const invSum = invMassA + invMassB;
+    if (!isFinite(invSum) || invSum <= 0) return;
+    const correction = overlap / invSum;
+
+    if (a.type === 'moon' || a.type === 'meteorite') {
+        a.x -= nx * correction * invMassA;
+        a.y -= ny * correction * invMassA;
+    }
+    if (b.type === 'moon' || b.type === 'meteorite') {
+        b.x += nx * correction * invMassB;
+        b.y += ny * correction * invMassB;
+    }
+}
+
+function applyFreeOrbitImpulse(
+    a: GalaxyNode,
+    b: GalaxyNode,
+    normal: { x: number; y: number },
+    overlap: number,
+    aVel: { vx: number; vy: number },
+    bVel: { vx: number; vy: number },
+    massA: number,
+    massB: number
+) {
+    const allowA = a.type === 'moon' || a.type === 'meteorite';
+    const allowB = b.type === 'moon' || b.type === 'meteorite';
+    if (!allowA && !allowB) return;
+
+    const nx = normal.x;
+    const ny = normal.y;
+    const relVx = bVel.vx - aVel.vx;
+    const relVy = bVel.vy - aVel.vy;
+    const relNormalSpeed = relVx * nx + relVy * ny;
+    const invMassA = 1 / Math.max(massA, 1);
+    const invMassB = 1 / Math.max(massB, 1);
+    const invMassSum = invMassA + invMassB;
+    if (invMassSum <= 0) return;
+
+    let impulseMagnitude = 0;
+    if (relNormalSpeed < 0) {
+        impulseMagnitude = -(1 + collisionConfig.restitution) * relNormalSpeed;
+    }
+    if (overlap > 0) {
+        impulseMagnitude += overlap * 0.35;
+    }
+    if (impulseMagnitude !== 0) {
+        impulseMagnitude /= invMassSum;
+    }
+
+    const impulseX = nx * impulseMagnitude;
+    const impulseY = ny * impulseMagnitude;
+
+    if (allowA) {
+        if (Math.hypot(a.vx, a.vy) < 0.5) {
+            a.vx = aVel.vx;
+            a.vy = aVel.vy;
+        }
+        a.vx -= impulseX * invMassA;
+        a.vy -= impulseY * invMassA;
+    }
+
+    if (allowB) {
+        if (Math.hypot(b.vx, b.vy) < 0.5) {
+            b.vx = bVel.vx;
+            b.vy = bVel.vy;
+        }
+        b.vx += impulseX * invMassB;
+        b.vy += impulseY * invMassB;
+    }
+
+    const tx = -ny;
+    const ty = nx;
+    const relativeTangent = relVx * tx + relVy * ty;
+    const maxFrictionImpulse = Math.abs(impulseMagnitude) * collisionConfig.tangentialFriction;
+    const frictionImpulse = clamp(-relativeTangent, -maxFrictionImpulse, maxFrictionImpulse);
+    const frictionX = tx * frictionImpulse;
+    const frictionY = ty * frictionImpulse;
+
+    const jitter = collisionConfig.tangentialJitter * (Math.random() - 0.5);
+
+    if (allowA) {
+        a.vx -= frictionX * invMassA + tx * jitter;
+        a.vy -= frictionY * invMassA + ty * jitter;
+        clampVelocity(a);
+        enableFreeOrbit(a);
+    }
+    if (allowB) {
+        b.vx += frictionX * invMassB + tx * jitter;
+        b.vy += frictionY * invMassB + ty * jitter;
+        clampVelocity(b);
+        enableFreeOrbit(b);
+    }
 }
 
 /**
@@ -916,34 +1058,14 @@ export function triggerCollisionEffects(result: CollisionResult): void {
         
         // NO camera shake - disabled by user preference
         
-        if (isSupernova) {
-            // SUPERNOVA MODE - extra debris and bright flash
-            spawnParticles({
-                count: 30 + Math.floor(50 * intensity),
-                pos: impactPoint,
-                speed: 300 + 500 * intensity,
-                life: 0.8 + 1.2 * intensity,
-                colors: ['#ffffff', '#ffffcc', '#ffff00'],
-                size: 2 + 4 * intensity,
-                gravity: 10,
-                angleSpread: Math.PI * 2,
-                direction: 0,
-                type: 'debris',
-            });
-            
-            // Max glow
-            if (nodeA) nodeA.collisionGlow = collisionConfig.maxGlow;
-            if (nodeB) nodeB.collisionGlow = collisionConfig.maxGlow;
-            
-            // NO camera shake - disabled by user preference
-        }
+        // Supernova visual mode disabled – keep standard strong impact effects only
     }
 }
 
 /**
  * Resolve all collisions between nodes
  * Call this AFTER applying forces, BEFORE integrating positions
- * Includes 25% chance of SUPERNOVA EVENT on moon-moon collision!
+ * Supernova events disabled – collisions are local only
  */
 export function resolveAllCollisions(
     nodes: GalaxyNode[], 
@@ -992,35 +1114,43 @@ export function resolveAllCollisions(
                 continue;
             }
             
+            // === MOON-PLANET COLLISION PREVENTION ===
+            // Moons should NEVER crash into their parent planet
+            // Create a force field / buffer zone around planets
+            const isPlanetMoonPair = (a.type === 'planet' && b.type === 'moon') || 
+                                     (a.type === 'moon' && b.type === 'planet');
+            
+            if (isPlanetMoonPair) {
+                const planetNode = a.type === 'planet' ? a : b;
+                const moonNode = a.type === 'planet' ? b : a;
+                
+                // Check if this moon belongs to this planet
+                const isMoonOfThisPlanet = moonNode.parentId === planetNode.id;
+                
+                const dx = moonNode.x - planetNode.x;
+                const dy = moonNode.y - planetNode.y;
+                const dist = Math.sqrt(dx * dx + dy * dy) || 0.001;
+                
+                // Force field extends beyond planet surface - create a buffer zone
+                const bufferZone = 200; // Extra gap to keep moons away from planet
+                const minDist = planetNode.radius + moonNode.radius + bufferZone;
+                
+                if (dist < minDist) {
+                    // Just add visual glow - don't push moons (deterministic orbit handles position)
+                    moonNode.collisionGlow = Math.min(collisionConfig.maxGlow, (moonNode.collisionGlow || 0) + 0.5);
+                    planetNode.collisionGlow = Math.min(collisionConfig.maxGlow, (planetNode.collisionGlow || 0) + 0.2);
+                }
+                continue; // Don't do normal collision for planet-moon pairs
+            }
+            
             const result = resolveCollision(a, b);
             if (result.occurred) {
                 results.push(result);
                 
                 // Check for SUPERNOVA EVENT: ONLY cross-chain moon collisions!
                 // Moons from the same planet just bounce, different planets = supernova potential
-                const isMoonMoonCollision = a.type === 'moon' && b.type === 'moon';
-                const isCrossChainCollision = a.parentId !== b.parentId; // Different parent planets!
-                const cooldownReady = canTriggerSupernova();
-                const rollSupernova = Math.random() < collisionConfig.supernovaEventChance;
-                
-                if (isMoonMoonCollision && isCrossChainCollision && cooldownReady && rollSupernova) {
-                    // SUPERNOVA EVENT! 🌟💥 Cross-chain collision!
-                    markSupernovaTriggered();
-                    
-                    const baseRadiusA = getBaseOrbitRadius?.(a.id) ?? a.orbitRadius;
-                    const baseRadiusB = getBaseOrbitRadius?.(b.id) ?? b.orbitRadius;
-                    
-                    triggerSupernovaEjection(
-                        a, 
-                        b, 
-                        result.impactPoint!, 
-                        baseRadiusA, 
-                        baseRadiusB
-                    );
-                } else {
-                    // Normal collision effects (gentle bump)
-                    triggerCollisionEffects(result);
-                }
+                // Supernova disabled – always use standard collision effects
+                triggerCollisionEffects(result);
             }
         }
     }
@@ -1037,6 +1167,67 @@ export function decayCollisionGlow(nodes: GalaxyNode[]): void {
             node.collisionGlow *= collisionConfig.glowDecay;
         } else {
             node.collisionGlow = 0;
+        }
+    }
+}
+
+/**
+ * Apply PROXIMITY GLOW effect - moons shine when approaching each other!
+ * Creates anticipation before collision - like seeing a meteor approach.
+ * Call this each frame in the physics loop.
+ */
+export function applyProximityGlow(nodes: GalaxyNode[]): void {
+    const proximityDist = collisionConfig.proximityGlowDistance;
+    const maxProximityGlow = collisionConfig.proximityGlowIntensity;
+    
+    // Only check moons and meteorites for proximity glow
+    const glowableNodes = nodes.filter(n => n.type === 'moon' || n.type === 'meteorite');
+    
+    for (let i = 0; i < glowableNodes.length; i++) {
+        for (let j = i + 1; j < glowableNodes.length; j++) {
+            const a = glowableNodes[i];
+            const b = glowableNodes[j];
+            
+            // Skip if same parent (same orbit, not interesting)
+            if (a.parentId === b.parentId) continue;
+            
+            // Calculate distance between centers
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            
+            // Check if within proximity range (but not colliding)
+            const sumRadii = a.radius + b.radius;
+            const gap = dist - sumRadii;
+            
+            if (gap > 0 && gap < proximityDist) {
+                // Calculate glow intensity based on how close (closer = brighter)
+                // gap=0 → max glow, gap=proximityDist → no glow
+                const proximityRatio = 1 - (gap / proximityDist);
+                const glowAmount = proximityRatio * proximityRatio * maxProximityGlow; // Quadratic falloff
+                
+                // Add proximity glow (don't override collision glow, add to it)
+                a.collisionGlow = Math.min(collisionConfig.maxGlow, (a.collisionGlow || 0) + glowAmount * 0.1);
+                b.collisionGlow = Math.min(collisionConfig.maxGlow, (b.collisionGlow || 0) + glowAmount * 0.1);
+                
+                // Spawn tiny anticipation particles when VERY close
+                if (proximityRatio > 0.7 && Math.random() < 0.08) {
+                    const midX = (a.x + b.x) / 2;
+                    const midY = (a.y + b.y) / 2;
+                    spawnParticles({
+                        count: 2,
+                        pos: { x: midX, y: midY },
+                        speed: 30,
+                        life: 0.4,
+                        colors: ['#ffffff', '#ffff88', a.color, b.color],
+                        size: 2,
+                        gravity: 0,
+                        angleSpread: Math.PI * 2,
+                        direction: 0,
+                        type: 'spark',
+                    });
+                }
+            }
         }
     }
 }

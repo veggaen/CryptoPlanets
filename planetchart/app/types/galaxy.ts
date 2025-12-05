@@ -26,6 +26,7 @@ export type ChainData = {
     name: string;             // "Ethereum", "Solana", etc.
     weight: number;           // Calculated based on current WeightMode
     tvl: number;              // Total Value Locked in USD
+    marketCap?: number;       // Native token market cap in USD (from CoinGecko)
     price?: number;           // Native token price (if applicable)
     change24h: number;        // 24h TVL or price change %
     volume24h: number;        // 24h volume in USD
@@ -76,6 +77,23 @@ export type GalaxyNode = {
     orbitRadius: number;           // Target distance from parent
     orbitAngle: number;            // Current angle in orbit (radians)
     angularVelocity: number;       // Rotation speed (radians/frame)
+    targetOrbitRadius?: number;    // Smoothed target orbit radius (for easing)
+    baseOrbitAngle?: number;       // Slot center angle before offsets
+    targetOrbitAngle?: number;     // Desired orbit angle (decays toward this)
+    angleOffset?: number;          // Temporary offset from slot center
+    ringIndex?: number;            // Which moon ring this node belongs to
+    slotIndex?: number;            // Index within the ring slots
+    slotCount?: number;            // Total slots in this ring
+    slotSpan?: number;             // Angular width reserved for this slot
+    fieldInnerRadius?: number;     // Inner boundary of parent field band (px)
+    fieldOuterRadius?: number;     // Outer boundary of parent field band (px)
+    fieldMidRadius?: number;       // Midpoint of the band for relaxed settling
+    freeOrbitTimer?: number;       // Frames remaining where node ignores rail and coasts
+    freeOrbitDurationTotal?: number; // Total frames assigned when free flight started
+    slotReleaseTimer?: number;     // Duration where slot clamping is relaxed
+    freeOrbitAnchorRadius?: number; // Radius captured at collision start
+    freeOrbitAnchorAngle?: number;  // Angle captured at collision start
+    railBlendTimer?: number;        // Frames spent blending back onto rail
 
     // Physics Properties
     weight: number;                // Used for calculations (TVL, market cap, etc.)

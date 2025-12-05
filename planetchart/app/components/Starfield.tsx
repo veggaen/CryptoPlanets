@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
+import type { QualityMode } from "@/types/performance";
 
 type Star = {
   id: string;
@@ -19,12 +20,18 @@ type ShootingStar = {
   angle: number;
 };
 
+const STAR_COUNTS = {
+  full: { far: 150, mid: 80, near: 40, shooting: 3 },
+  lite: { far: 60, mid: 30, near: 12, shooting: 1 },
+} as const;
+
 // Helper function to generate stars (called only on client)
-function generateStarLayers() {
+function generateStarLayers(qualityMode: QualityMode) {
   const layers: { stars: Star[]; layer: "far" | "mid" | "near" }[] = [];
+  const counts = STAR_COUNTS[qualityMode];
 
   // Far layer: many small, dim stars
-  const farStars: Star[] = Array.from({ length: 150 }, (_, i) => ({
+  const farStars: Star[] = Array.from({ length: counts.far }, (_, i) => ({
     id: `far-${i}`,
     x: Math.random() * 100,
     y: Math.random() * 100,
@@ -34,7 +41,7 @@ function generateStarLayers() {
   }));
 
   // Mid layer: moderate amount of medium stars
-  const midStars: Star[] = Array.from({ length: 80 }, (_, i) => ({
+  const midStars: Star[] = Array.from({ length: counts.mid }, (_, i) => ({
     id: `mid-${i}`,
     x: Math.random() * 100,
     y: Math.random() * 100,
@@ -44,7 +51,7 @@ function generateStarLayers() {
   }));
 
   // Near layer: fewer large, bright stars
-  const nearStars: Star[] = Array.from({ length: 40 }, (_, i) => ({
+  const nearStars: Star[] = Array.from({ length: counts.near }, (_, i) => ({
     id: `near-${i}`,
     x: Math.random() * 100,
     y: Math.random() * 100,
@@ -63,8 +70,9 @@ function generateStarLayers() {
 }
 
 // Helper function to generate shooting stars (called only on client)
-function generateShootingStars(): ShootingStar[] {
-  return Array.from({ length: 3 }, (_, i) => ({
+function generateShootingStars(qualityMode: QualityMode): ShootingStar[] {
+  const count = STAR_COUNTS[qualityMode].shooting;
+  return Array.from({ length: count }, (_, i) => ({
     id: `shooting-${i}`,
     startX: Math.random() * 100,
     startY: Math.random() * 50,
@@ -72,16 +80,16 @@ function generateShootingStars(): ShootingStar[] {
   }));
 }
 
-export default function Starfield() {
+export default function Starfield({ qualityMode }: { qualityMode: QualityMode }) {
   // Initialize with empty arrays (deterministic for SSR)
   const [starLayers, setStarLayers] = useState<{ stars: Star[]; layer: "far" | "mid" | "near" }[]>([]);
   const [shootingStars, setShootingStars] = useState<ShootingStar[]>([]);
 
   // Generate stars only on client side after mount
   useEffect(() => {
-    setStarLayers(generateStarLayers());
-    setShootingStars(generateShootingStars());
-  }, []);
+    setStarLayers(generateStarLayers(qualityMode));
+    setShootingStars(generateShootingStars(qualityMode));
+  }, [qualityMode]);
 
   // Don't render stars until client-side hydration is complete
   if (starLayers.length === 0) {

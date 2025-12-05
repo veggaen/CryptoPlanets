@@ -4,7 +4,7 @@
 import type { GalaxyData, GalaxyState, GalaxyNode, ChainData, BTCData, WeightMode } from "@/types/galaxy";
 import { physicsConfig } from "@/config/physicsConfig";
 import { debugLog } from "@/utils/debug";
-import { resolveAllCollisions, updateParticles, decayCollisionGlow, updateFlungMoons, isMoonFlung } from "./collision";
+import { resolveAllCollisions, updateParticles, decayCollisionGlow, updateFlungMoons, isMoonFlung, applyProximityGlow, collisionConfig } from "./collision";
 
 // Store base orbit radii for moons (to decay back to after collision push)
 const baseOrbitRadii = new Map<string, number>();
@@ -118,47 +118,59 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
 
             const createdMoons: GalaxyNode[] = [];
 
-            // 1. Create MOONS (Chaotic Asteroid Field Layout)
+            // 1. Create MOONS (Deterministic ring + slot allocator)
             moons.forEach((token, tIndex) => {
-                // Base ring calculation (looser than before)
                 const ringIndex = Math.floor(tIndex / physicsConfig.moonSlotsPerRing);
                 const slotIndex = tIndex % physicsConfig.moonSlotsPerRing;
+                const slotCount = physicsConfig.moonSlotsPerRing;
 
-                // Radius with LARGE random variance for asteroid field feel
+                // Deterministic ring radius with gentle jitter for life
                 const ringBaseRadius = planetRadius + physicsConfig.baseMoonOrbitRadius + (ringIndex * physicsConfig.moonRingStep);
-                const radiusVariance = (physicsConfig.moonOrbitRadiusVariance || 800);
-                const moonOrbitRadius = ringBaseRadius + (Math.random() * radiusVariance * 2 - radiusVariance);
+                const radiusVariance = Math.min(physicsConfig.moonOrbitRadiusVariance || 0, physicsConfig.moonRingStep * 0.4);
+                const moonOrbitRadius = ringBaseRadius + (radiusVariance ? (Math.random() * radiusVariance - radiusVariance / 2) : 0);
 
-                // Random starting angle (completely random, no slots)
-                const moonAngle = Math.random() * Math.PI * 2;
-                
-                // Random eccentricity for elliptical orbits
-                const eccentricity = Math.random() * (physicsConfig.moonOrbitEccentricity || 0.25);
+                // Slot-based angle to prevent overlap
+                const angleStep = (Math.PI * 2) / slotCount;
+                const planetPhaseOffset = index * 0.137; // Golden angle offset per planet for desync
+                const slotBaseAngle = (slotIndex * angleStep) + planetPhaseOffset;
+                const slotJitterRange = angleStep * 0.2; // stay within reserved slot span
+                const slotJitter = (Math.random() * 2 - 1) * slotJitterRange;
+                const moonAngle = slotBaseAngle + slotJitter;
+
+                // Random eccentricity for elliptical feel (small)
+                const eccentricity = Math.random() * Math.min(physicsConfig.moonOrbitEccentricity || 0, 0.2);
 
                 const moonX = x + Math.cos(moonAngle) * moonOrbitRadius;
                 const moonY = y + Math.sin(moonAngle) * moonOrbitRadius;
 
-                // LOG SCALE for dramatic size differentiation
-                // log10($13B) = 10.1, log10($100M) = 8.0 → difference of 2.1
-                const tokenCap = token.marketCap || 1;
+                // ===== GLOBAL LOG SCALE for DRAMATIC size differentiation =====
+                // Use GLOBAL market cap range across ALL tokens, not just this chain
+                // This ensures a $10B token on ETH is the same size as a $10B token on SOL
+                // 
+                // Global scale anchors:
+                // - MAX: $30B (top memecoins like SHIB, PEPE at peak)
+                // - MIN: $1M (micro cap threshold)
+                // This gives log range: log10(30B) - log10(1M) = 10.5 - 6 = 4.5
+                const GLOBAL_MAX_CAP = 30_000_000_000; // $30B
+                const GLOBAL_MIN_CAP = 1_000_000;       // $1M
                 
-                // Find max and min market cap among this chain's moons
-                const moonCaps = moons.map(m => m.marketCap || 1);
-                const maxMoonCap = Math.max(...moonCaps);
-                const minMoonCap = Math.min(...moonCaps.filter(c => c > 0));
+                const tokenCap = Math.max(token.marketCap || 1, GLOBAL_MIN_CAP);
+                const cappedTokenCap = Math.min(tokenCap, GLOBAL_MAX_CAP);
                 
-                // Log scale: normalize between 0 and 1
-                const logMax = Math.log10(maxMoonCap);
-                const logMin = Math.log10(minMoonCap);
-                const logToken = Math.log10(tokenCap);
+                // Log scale: normalize between 0 and 1 using GLOBAL range
+                const logMax = Math.log10(GLOBAL_MAX_CAP);
+                const logMin = Math.log10(GLOBAL_MIN_CAP);
+                const logToken = Math.log10(cappedTokenCap);
                 
-                // Normalized 0-1 based on log scale
-                const logRange = logMax - logMin || 1;
-                const normalizedLog = (logToken - logMin) / logRange;
+                // Normalized 0-1 based on GLOBAL log scale
+                const logRange = logMax - logMin; // ~4.5
+                const normalizedLog = Math.max(0, Math.min(1, (logToken - logMin) / logRange));
                 
                 // Map to radius range with FULL range utilization
+                // Use CUBIC easing for more dramatic size differences
+                const easedNorm = normalizedLog * normalizedLog * normalizedLog;
                 let radius = physicsConfig.moonMinRadius + 
-                    normalizedLog * (physicsConfig.moonMaxRadius - physicsConfig.moonMinRadius);
+                    easedNorm * (physicsConfig.moonMaxRadius - physicsConfig.moonMinRadius);
 
                 // Clamp to range
                 radius = Math.max(physicsConfig.moonMinRadius, Math.min(physicsConfig.moonMaxRadius, radius));
@@ -171,24 +183,39 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
 
                 const moonId = `${chain.id}-${token.symbol}-${tIndex}`;
                 
-                // Store base orbit radius for decay
-                baseOrbitRadii.set(moonId, moonOrbitRadius);
+                // Calculate mass based on market cap (for bowling ball physics)
+                // Higher market cap = more mass = harder to move in collision
+                const moonMass = 5 + (normalizedLog * 45); // Range: 5-50 based on market cap
+                
+                // Calculate angular velocity for orbit
+                const angularVel = physicsConfig.baseTokenAngularVel * (0.8 + Math.random() * 0.4) * (Math.random() > 0.5 ? 1 : -1);
+                
+                // NO INITIAL VELOCITY - moons start in calm orbital mode
+                // Velocity only gets applied when hit by collision
                 
                 const moonNode: GalaxyNode = {
                     id: moonId,
                     type: 'moon',
-                    parentId: chain.id,
+                    parentId: node.id,
                     x: moonX,
                     y: moonY,
-                    vx: 0, // No initial velocity - calm orbits
+                    vx: 0,
                     vy: 0,
                     radius,
                     color: token.color || '#cbd5e1',
                     orbitRadius: moonOrbitRadius,
                     orbitAngle: moonAngle,
-                    angularVelocity: physicsConfig.baseTokenAngularVel * (0.8 + Math.random() * 0.4) * (Math.random() > 0.5 ? 1 : -1), // Slight speed variance, random direction
+                    angularVelocity: angularVel,
+                    targetOrbitRadius: moonOrbitRadius,
+                    baseOrbitAngle: slotBaseAngle,
+                    targetOrbitAngle: moonAngle,
+                    angleOffset: slotJitter,
+                    ringIndex,
+                    slotIndex,
+                    slotCount,
+                    slotSpan: angleStep,
                     weight: token.marketCap,
-                    mass: 10 + Math.random() * 10, // Slight mass variance
+                    mass: moonMass, // Mass based on market cap for bowling ball physics!
                     orbitEccentricity: eccentricity, // Store for elliptical orbit
                     data: token as any,
                     isDragging: false,
@@ -201,21 +228,65 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
                 createdMoons.push(moonNode);
             });
 
+            if (createdMoons.length > 0) {
+                const totalRadius = createdMoons.reduce((sum, moon) => sum + moon.radius, 0);
+                const avgRadius = totalRadius / createdMoons.length;
+                const innerBias = physicsConfig.fieldInnerSizeBias ?? 0;
+                const outerBias = physicsConfig.fieldOuterSizeBias ?? 0;
+                const baseInner = planetRadius + (physicsConfig.fieldInnerPadding ?? 0) + avgRadius * innerBias;
+                const thickness = (physicsConfig.fieldBaseThickness ?? 0)
+                    + createdMoons.length * (physicsConfig.fieldPerMoonSpread ?? 0)
+                    + avgRadius * (physicsConfig.fieldMoonSizeSpread ?? 0);
+                const baseOuter = baseInner + thickness;
+
+                for (const moonNode of createdMoons) {
+                    const inner = baseInner + moonNode.radius * innerBias;
+                    const outer = baseOuter + moonNode.radius * outerBias;
+                    const safeInner = Math.min(inner, outer - 10);
+                    const safeOuter = Math.max(outer, inner + 10);
+                    moonNode.fieldInnerRadius = safeInner;
+                    moonNode.fieldOuterRadius = safeOuter;
+                    moonNode.fieldMidRadius = (safeInner + safeOuter) * 0.5;
+                    const clampedRadius = clamp(moonNode.orbitRadius, safeInner, safeOuter);
+                    if (clampedRadius !== moonNode.orbitRadius) {
+                        moonNode.orbitRadius = clampedRadius;
+                        moonNode.targetOrbitRadius = clampedRadius;
+                        const relAngle = Math.atan2(moonNode.y - node.y, moonNode.x - node.x);
+                        moonNode.orbitAngle = relAngle;
+                        const renderRadius = moonNode.orbitEccentricity
+                            ? clampedRadius * (1 + moonNode.orbitEccentricity * Math.cos(moonNode.orbitAngle))
+                            : clampedRadius;
+                        moonNode.x = node.x + Math.cos(moonNode.orbitAngle) * renderRadius;
+                        moonNode.y = node.y + Math.sin(moonNode.orbitAngle) * renderRadius;
+                    }
+                    baseOrbitRadii.set(moonNode.id, clampedRadius);
+                }
+            }
+
             // 2. Create METEORITES (Orbiting Moons)
             meteorites.forEach((token, mIndex) => {
                 if (createdMoons.length === 0) return;
 
                 const parentMoon = createdMoons[mIndex % createdMoons.length];
-                const orbitRadius = physicsConfig.meteoriteOrbitRadius + (Math.random() * 5);
+                const orbitRadius = physicsConfig.meteoriteOrbitRadius + (Math.random() * 50) - 25; // More variance
                 const angle = Math.random() * Math.PI * 2;
 
                 const metX = parentMoon.x + Math.cos(angle) * orbitRadius;
                 const metY = parentMoon.y + Math.sin(angle) * orbitRadius;
 
-                const radius = physicsConfig.meteoriteMinRadius + Math.random() * (physicsConfig.meteoriteMaxRadius - physicsConfig.meteoriteMinRadius);
+                // Size based on market cap (smaller meteorites for smaller caps)
+                const metCap = token.marketCap || 100000;
+                const capNormalized = Math.log10(Math.max(metCap, 100000)) / 10; // 0-1 range roughly
+                const radius = physicsConfig.meteoriteMinRadius + 
+                    capNormalized * (physicsConfig.meteoriteMaxRadius - physicsConfig.meteoriteMinRadius);
 
                 const metId = `${chain.id}-met-${token.symbol}-${mIndex}`;
                 baseOrbitRadii.set(metId, orbitRadius);
+                
+                // SMALLER meteorites orbit FASTER (Kepler's laws - inversely proportional to distance)
+                // Also: smaller mass = faster (think small asteroids vs big rocks)
+                const sizeRatio = radius / physicsConfig.meteoriteMaxRadius; // 0-1, bigger = closer to 1
+                const speedMultiplier = 3 - (sizeRatio * 2); // Range: 1-3x, smaller = faster
 
                 const metNode: GalaxyNode = {
                     id: metId,
@@ -229,9 +300,13 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
                     color: token.color || '#94a3b8', // Dimmer color
                     orbitRadius, // Relative to moon
                     orbitAngle: angle,
-                    angularVelocity: physicsConfig.baseTokenAngularVel * 2 * (Math.random() > 0.5 ? 1 : -1), // Fast orbit
+                    targetOrbitRadius: orbitRadius,
+                    baseOrbitAngle: angle,
+                    targetOrbitAngle: angle,
+                    angleOffset: 0,
+                    angularVelocity: physicsConfig.baseTokenAngularVel * speedMultiplier * (Math.random() > 0.5 ? 1 : -1), // Smaller = faster!
                     weight: token.marketCap || 0,
-                    mass: 1,
+                    mass: 0.5 + (sizeRatio * 1.5), // Smaller mass for smaller meteorites
                     data: token as any,
                     isDragging: false,
                     isSelected: false,
@@ -324,22 +399,54 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
  */
 export function tickGalaxy(state: GalaxyState, dt: number): void {
     const { nodes } = state;
+    const ANGLE_EASE = 0.2;
+    const RADIUS_EASE = 0.12;
 
     for (const node of nodes) {
         if (node.type === 'sun') {
             resetNodePhysics(node);
             continue;
         }
+
+        const prevOrbitRadius = node.orbitRadius;
+        const prevOrbitAngle = node.orbitAngle;
+        const wasFree = (node.freeOrbitTimer ?? 0) > 0;
+        const wasBlending = (node.railBlendTimer ?? 0) > 0;
+        const fieldBounds = getFieldBounds(node);
         
         // Skip flung moons - they're handled by updateFlungMoons
         if (isMoonFlung(node.id)) {
             continue;
         }
 
-        // --- Step 1: Advance orbit angle ---
-        node.orbitAngle += node.angularVelocity * dt;
-        if (node.orbitAngle > Math.PI * 2) node.orbitAngle -= Math.PI * 2;
-        if (node.orbitAngle < 0) node.orbitAngle += Math.PI * 2;
+        const isFreeOrbiting = (node.freeOrbitTimer ?? 0) > 0;
+        if (isFreeOrbiting) {
+            node.freeOrbitTimer = Math.max(0, (node.freeOrbitTimer ?? 0) - dt);
+        } else if (node.freeOrbitTimer) {
+            node.freeOrbitTimer = 0;
+            node.freeOrbitDurationTotal = 0;
+        }
+
+        const isRailBlending = !isFreeOrbiting && (node.railBlendTimer ?? 0) > 0;
+        if (isRailBlending) {
+            node.railBlendTimer = Math.max(0, (node.railBlendTimer ?? 0) - dt);
+        } else if (!isFreeOrbiting && node.railBlendTimer) {
+            node.railBlendTimer = 0;
+        }
+
+        if (node.slotReleaseTimer && node.slotReleaseTimer > 0) {
+            node.slotReleaseTimer = Math.max(0, node.slotReleaseTimer - dt);
+        } else if (node.slotReleaseTimer) {
+            node.slotReleaseTimer = 0;
+        }
+
+        // --- Step 1: Advance target orbit angle deterministically ---
+        if (typeof node.targetOrbitAngle !== 'number') {
+            node.targetOrbitAngle = node.orbitAngle;
+        }
+        if (!isFreeOrbiting) {
+            node.targetOrbitAngle = normalizeAngle(node.targetOrbitAngle + node.angularVelocity * dt);
+        }
 
         // --- Step 2: Calculate parent center ---
         let centerX = 0;
@@ -357,75 +464,263 @@ export function tickGalaxy(state: GalaxyState, dt: number): void {
             }
         }
 
-        // --- Step 3: Calculate ideal orbital position ---
-        const baseRadius = baseOrbitRadii.get(node.id) || node.orbitRadius;
-        let effectiveRadius = node.orbitRadius;
-        
-        if (node.type === 'moon') {
-            const eccentricity = node.orbitEccentricity || 0;
-            effectiveRadius = node.orbitRadius * (1 + eccentricity * Math.cos(node.orbitAngle));
+        // --- Step 3: Determine base/target orbit radius ---
+        const baseRadius = baseOrbitRadii.get(node.id) ?? node.orbitRadius;
+        if (typeof node.targetOrbitRadius !== 'number') {
+            node.targetOrbitRadius = baseRadius;
         }
-        
-        const idealX = centerX + Math.cos(node.orbitAngle) * effectiveRadius;
-        const idealY = centerY + Math.sin(node.orbitAngle) * effectiveRadius;
 
-        // --- Step 4: Handle moon physics (velocity-based when hit, orbital otherwise) ---
-        if (node.type === 'moon') {
-            // Check if moon has significant velocity from collision
-            const speed = Math.sqrt(node.vx * node.vx + node.vy * node.vy);
-            
-            if (speed > 0.5) {
-                // Moon was hit! Use velocity-based movement
-                node.x += node.vx * dt * 60;
-                node.y += node.vy * dt * 60;
-                
-                // Gradually decay velocity (friction)
-                node.vx *= 0.985;
-                node.vy *= 0.985;
-                
-                // Gentle pull back toward orbit (gravity-like)
-                const pullStrength = 0.002;
-                node.vx += (idealX - node.x) * pullStrength;
-                node.vy += (idealY - node.y) * pullStrength;
-                
-                // Update orbit angle to match actual position (so orbit continues from here)
-                node.orbitAngle = Math.atan2(node.y - centerY, node.x - centerX);
-                node.orbitRadius = Math.sqrt((node.x - centerX) ** 2 + (node.y - centerY) ** 2);
-                
-                // Slowly decay orbit radius back to base
-                if (Math.abs(node.orbitRadius - baseRadius) > 10) {
-                    node.orbitRadius = node.orbitRadius * 0.998 + baseRadius * 0.002;
-                }
-            } else {
-                // Normal calm orbital motion
-                node.x = idealX;
-                node.y = idealY;
+        let minOrbitRadius: number | undefined = fieldBounds?.inner;
+        let maxOrbitRadius: number | undefined = fieldBounds?.outer;
+
+        const shouldClampOrbit = !(isFreeOrbiting || isRailBlending);
+
+        if (!fieldBounds && node.type === 'moon') {
+            const parentPlanet = parentNode;
+            const minDistFromPlanet = parentPlanet ? parentPlanet.radius + node.radius + 80 : 0;
+            minOrbitRadius = minDistFromPlanet + 40;
+            maxOrbitRadius = baseRadius * 1.35;
+        }
+
+        if (shouldClampOrbit) {
+            if (fieldBounds) {
+                const targetRadius = node.targetOrbitRadius ?? baseRadius;
+                const clampedRadius = clamp(targetRadius, fieldBounds.inner, fieldBounds.outer);
+                const spring = Math.min(1, Math.max(physicsConfig.fieldSpringStrength ?? 0, 0));
+                node.targetOrbitRadius = spring > 0
+                    ? targetRadius + (clampedRadius - targetRadius) * spring
+                    : clampedRadius;
+            } else if (
+                typeof minOrbitRadius === 'number' &&
+                typeof maxOrbitRadius === 'number'
+            ) {
+                node.targetOrbitRadius = clamp(node.targetOrbitRadius ?? baseRadius, minOrbitRadius, maxOrbitRadius);
+            }
+        }
+
+        if (!isFreeOrbiting && !isRailBlending) {
+            const relaxRate = node.type === 'moon'
+                ? (physicsConfig.fieldRelaxRate ?? 0.05)
+                : 0.02;
+            const preferredRadius = fieldBounds
+                ? clamp(baseRadius, fieldBounds.inner, fieldBounds.outer)
+                : baseRadius;
+            node.targetOrbitRadius += (preferredRadius - node.targetOrbitRadius) * relaxRate;
+        }
+
+        const desiredRadius = node.targetOrbitRadius ?? baseRadius;
+        let desiredRenderRadius = desiredRadius;
+        if (node.type === 'moon' && node.orbitEccentricity) {
+            desiredRenderRadius = desiredRadius * (1 + node.orbitEccentricity * Math.cos(node.targetOrbitAngle));
+        }
+        const desiredX = centerX + Math.cos(node.targetOrbitAngle) * desiredRenderRadius;
+        const desiredY = centerY + Math.sin(node.targetOrbitAngle) * desiredRenderRadius;
+
+        const offsetX = node.x - centerX;
+        const offsetY = node.y - centerY;
+        const distFromCenter = Math.sqrt(offsetX * offsetX + offsetY * offsetY) || 1;
+        const radialDirX = offsetX / distFromCenter;
+        const radialDirY = offsetY / distFromCenter;
+
+        if (isFreeOrbiting && collisionConfig.globalVelocityDrag) {
+            const drag = Math.pow(collisionConfig.globalVelocityDrag, dt);
+            node.vx *= drag;
+            node.vy *= drag;
+        }
+
+        if (isFreeOrbiting) {
+            const rawAnchorRadius = node.freeOrbitAnchorRadius ?? desiredRadius;
+            const anchorRadius = fieldBounds
+                ? clamp(rawAnchorRadius, fieldBounds.inner, fieldBounds.outer)
+                : rawAnchorRadius;
+            node.freeOrbitAnchorRadius = anchorRadius;
+            const anchorAngle = node.freeOrbitAnchorAngle ?? node.targetOrbitAngle;
+
+            // Slowly advance anchor angle so free flyers keep orbiting the parent
+            node.freeOrbitAnchorAngle = normalizeAngle(anchorAngle + node.angularVelocity * dt);
+            // Drift anchor radius back toward base for long flights
+            node.freeOrbitAnchorRadius = anchorRadius + (baseRadius - anchorRadius) * 0.05 * dt;
+
+            const radialError = (node.freeOrbitAnchorRadius ?? desiredRadius) - distFromCenter;
+            const springRamp = (() => {
+                const total = node.freeOrbitDurationTotal || collisionConfig.freeOrbitDuration || 1;
+                if (!total) return 1;
+                const remaining = Math.max(node.freeOrbitTimer ?? 0, 0);
+                const normalized = 1 - Math.min(remaining / total, 1);
+                const ramp = collisionConfig.freeOrbitSpringRamp ?? 0;
+                return ramp <= 0 ? 1 : Math.min(1, Math.max(0.1, normalized * ramp + (1 - ramp)));
+            })();
+            const radialAccel = radialError * (collisionConfig.freeOrbitSpring || 0) * springRamp;
+            node.vx += radialDirX * radialAccel * dt;
+            node.vy += radialDirY * radialAccel * dt;
+
+            const orbitAssist = collisionConfig.freeOrbitOrbitAssist ?? 0;
+            const angularVel = node.angularVelocity || 0;
+            if (orbitAssist > 0 && angularVel !== 0) {
+                const tangentialDirX = -radialDirY * Math.sign(angularVel);
+                const tangentialDirY = radialDirX * Math.sign(angularVel);
+                const tangentialSpeed = (node.freeOrbitAnchorRadius ?? desiredRadius) * Math.abs(angularVel);
+                const assistAccel = tangentialSpeed * orbitAssist;
+                node.vx += tangentialDirX * assistAccel * dt;
+                node.vy += tangentialDirY * assistAccel * dt;
+            }
+
+            node.x += node.vx * dt;
+            node.y += node.vy * dt;
+
+            const damping = Math.pow(collisionConfig.freeOrbitDamping, dt);
+            node.vx *= damping;
+            node.vy *= damping;
+
+            const relX = node.x - centerX;
+            const relY = node.y - centerY;
+            node.orbitRadius = Math.sqrt(relX * relX + relY * relY) || node.orbitRadius;
+            node.orbitAngle = normalizeAngle(Math.atan2(relY, relX));
+
+            if (fieldBounds) {
+                applyFieldBoundaryForce(node, fieldBounds, relX, relY, dt);
+            }
+
+            if ((node.freeOrbitTimer ?? 0) <= 0.05) {
                 node.vx = 0;
                 node.vy = 0;
-                
-                // Decay orbit radius back to base
-                if (Math.abs(node.orbitRadius - baseRadius) > 5) {
-                    node.orbitRadius = node.orbitRadius * 0.995 + baseRadius * 0.005;
+                node.freeOrbitTimer = 0;
+                node.freeOrbitDurationTotal = 0;
+
+                const settledRadius = fieldBounds
+                    ? clamp(node.orbitRadius, fieldBounds.inner, fieldBounds.outer)
+                    : node.orbitRadius;
+                const settledAngle = node.orbitAngle;
+                if (node.type === 'moon' && minOrbitRadius !== undefined && maxOrbitRadius !== undefined) {
+                    node.targetOrbitRadius = clamp(settledRadius, minOrbitRadius, maxOrbitRadius);
+                } else {
+                    node.targetOrbitRadius = settledRadius;
                 }
+                node.targetOrbitAngle = settledAngle;
+                node.freeOrbitAnchorRadius = settledRadius;
+                node.freeOrbitAnchorAngle = settledAngle;
+                const blendDuration = collisionConfig.railBlendDuration || 0;
+                node.railBlendTimer = blendDuration > 0 ? blendDuration : 0;
+                if (physicsConfig.enableOrbitDebug && node.railBlendTimer) {
+                    console.debug('[orbit-debug] blend-start', {
+                        id: node.id,
+                        radius: node.orbitRadius,
+                        targetRadius: node.targetOrbitRadius,
+                        blendDuration,
+                    });
+                }
+
+                // Leave x/y as-is; deterministic orbit step will take over next frame
+            }
+
+            continue;
+        }
+
+        if (isRailBlending && (collisionConfig.railBlendDuration || 0) > 0) {
+            const totalBlend = collisionConfig.railBlendDuration || 1;
+            const remaining = Math.max(node.railBlendTimer ?? 0, 0);
+            const blendT = 1 - Math.min(remaining / totalBlend, 1);
+            const easeParam = collisionConfig.railBlendEase ?? 0;
+            const eased = easeParam <= 0 ? blendT : 1 - Math.pow(1 - blendT, 1 + easeParam * 4);
+            const startAngle = node.freeOrbitAnchorAngle ?? node.orbitAngle;
+            const startRadius = node.freeOrbitAnchorRadius ?? node.orbitRadius;
+            const targetRadius = node.targetOrbitRadius ?? baseRadius;
+            const angleSpan = shortestAngleDiff(node.targetOrbitAngle, startAngle);
+
+            node.orbitRadius = startRadius + (targetRadius - startRadius) * eased;
+            node.orbitAngle = normalizeAngle(startAngle + angleSpan * eased);
+            if (fieldBounds) {
+                node.orbitRadius = clamp(node.orbitRadius, fieldBounds.inner, fieldBounds.outer);
+            }
+
+            if (blendT >= 0.999) {
+                node.railBlendTimer = 0;
+                node.freeOrbitAnchorAngle = undefined;
+                node.freeOrbitAnchorRadius = undefined;
+                node.orbitRadius = fieldBounds
+                    ? clamp(targetRadius, fieldBounds.inner, fieldBounds.outer)
+                    : targetRadius;
+                node.orbitAngle = node.targetOrbitAngle;
             }
         } else {
-            // Planets and meteorites: deterministic orbits
-            node.x = idealX;
-            node.y = idealY;
+            // Ease orbit radius toward target
+            node.orbitRadius += (node.targetOrbitRadius - node.orbitRadius) * RADIUS_EASE;
+            if (fieldBounds) {
+                node.orbitRadius = clamp(node.orbitRadius, fieldBounds.inner, fieldBounds.outer);
+            }
+
+            // --- Step 4: Ease actual angle toward target angle ---
+            const angleDiff = shortestAngleDiff(node.targetOrbitAngle, node.orbitAngle);
+            node.orbitAngle = normalizeAngle(node.orbitAngle + angleDiff * ANGLE_EASE);
+        }
+
+        // --- Step 5: Calculate final drawing radius (apply eccentricity wobble) ---
+        let renderRadius = node.orbitRadius;
+        if (node.type === 'moon' && node.orbitEccentricity) {
+            renderRadius = node.orbitRadius * (1 + node.orbitEccentricity * Math.cos(node.orbitAngle));
+        }
+        if (fieldBounds) {
+            renderRadius = clamp(renderRadius, fieldBounds.inner, fieldBounds.outer);
+        }
+
+        const railTargetX = centerX + Math.cos(node.orbitAngle) * renderRadius;
+        const railTargetY = centerY + Math.sin(node.orbitAngle) * renderRadius;
+
+        if (isRailBlending) {
+            const totalBlend = collisionConfig.railBlendDuration || 1;
+            const remaining = Math.max(node.railBlendTimer ?? 0, 0);
+            const blendT = 1 - Math.min(remaining / totalBlend, 1);
+            const followLerp = Math.max(0.05, Math.min(1, blendT));
+            node.x += (railTargetX - node.x) * followLerp;
+            node.y += (railTargetY - node.y) * followLerp;
+        } else {
+            const railLerp = node.type === 'planet' ? 1 : (physicsConfig.railSnapLerp ?? 1);
+            if (railLerp >= 1) {
+                node.x = railTargetX;
+                node.y = railTargetY;
+            } else {
+                node.x += (railTargetX - node.x) * railLerp;
+                node.y += (railTargetY - node.y) * railLerp;
+            }
+        }
+
+        if (physicsConfig.enableOrbitDebug) {
+            const radiusThreshold = physicsConfig.orbitDebugRadiusThreshold ?? 0;
+            const angleThreshold = physicsConfig.orbitDebugAngleThreshold ?? 0;
+            const radiusDelta = Math.abs(node.orbitRadius - prevOrbitRadius);
+            const angleDelta = Math.abs(shortestAngleDiff(node.orbitAngle, prevOrbitAngle));
+            if ((radiusThreshold && radiusDelta > radiusThreshold) || (angleThreshold && angleDelta > angleThreshold)) {
+                console.debug('[orbit-debug] jump-detected', {
+                    id: node.id,
+                    type: node.type,
+                    radiusDelta: Math.round(radiusDelta),
+                    angleDelta: Number(angleDelta.toFixed(3)),
+                    wasFree,
+                    wasBlending,
+                    isFreeOrbiting,
+                    isRailBlending,
+                    orbitRadius: Math.round(node.orbitRadius),
+                    targetRadius: Math.round(node.targetOrbitRadius || 0),
+                    railBlendTimer: node.railBlendTimer,
+                });
+            }
         }
     }
     
     // --- Step 5: Update flung moons (supernova ejection physics) ---
     updateFlungMoons(nodes, dt);
     
-    // --- Step 6: HARD collision detection for all pairs ---
+    // --- Step 6: PROXIMITY GLOW - moons shine when approaching! ---
+    applyProximityGlow(nodes);
+    
+    // --- Step 7: HARD collision detection for all pairs ---
     // Collisions give moons velocity, which makes them deviate from orbit
     resolveAllCollisions(nodes, (nodeId) => baseOrbitRadii.get(nodeId));
     
-    // --- Step 7: Update particle effects ---
+    // --- Step 8: Update particle effects ---
     updateParticles(dt);
     
-    // --- Step 8: Decay collision glow ---
+    // --- Step 9: Decay collision glow ---
     decayCollisionGlow(nodes);
 }
 
@@ -483,6 +778,91 @@ function decayVisuals(node: GalaxyNode) {
 
 function lerp(min: number, max: number, t: number): number {
     return min + (max - min) * Math.max(0, Math.min(1, t));
+}
+
+function normalizeAngle(angle: number): number {
+    const twoPi = Math.PI * 2;
+    let result = angle % twoPi;
+    if (result < 0) result += twoPi;
+    return result;
+}
+
+function shortestAngleDiff(target: number, current: number): number {
+    const twoPi = Math.PI * 2;
+    let diff = (target - current) % twoPi;
+    if (diff > Math.PI) diff -= twoPi;
+    if (diff < -Math.PI) diff += twoPi;
+    return diff;
+}
+
+function clamp(value: number, min: number, max: number): number {
+    if (Number.isNaN(value)) return min;
+    if (value < min) return min;
+    if (value > max) return max;
+    return value;
+}
+
+type FieldBounds = {
+    inner: number;
+    outer: number;
+};
+
+function getFieldBounds(node: GalaxyNode): FieldBounds | null {
+    const inner = node.fieldInnerRadius;
+    const outer = node.fieldOuterRadius;
+    if (typeof inner !== 'number' || typeof outer !== 'number') {
+        return null;
+    }
+    const min = Math.min(inner, outer);
+    const max = Math.max(inner, outer);
+    if (!isFinite(min) || !isFinite(max) || max <= 0) {
+        return null;
+    }
+    return { inner: min, outer: max };
+}
+
+function clampToField(node: GalaxyNode, value: number): number {
+    const bounds = getFieldBounds(node);
+    if (!bounds) return value;
+    return clamp(value, bounds.inner, bounds.outer);
+}
+
+function applyFieldBoundaryForce(
+    node: GalaxyNode,
+    bounds: FieldBounds,
+    relX: number,
+    relY: number,
+    dt: number
+): void {
+    const dist = Math.sqrt(relX * relX + relY * relY) || 1;
+    const innerGap = bounds.inner - dist;
+    const outerGap = dist - bounds.outer;
+    let correction = 0;
+    if (innerGap > 0) {
+        correction = innerGap;
+    } else if (outerGap > 0) {
+        correction = -outerGap;
+    }
+    if (correction === 0) {
+        node.orbitRadius = clamp(dist, bounds.inner, bounds.outer);
+        return;
+    }
+
+    const nx = relX / dist;
+    const ny = relY / dist;
+    const spring = Math.max(physicsConfig.fieldVelocitySpring ?? 0, 0);
+    if (spring > 0) {
+        node.vx += nx * correction * spring * dt;
+        node.vy += ny * correction * spring * dt;
+    }
+
+    const damping = physicsConfig.fieldBoundaryDamping ?? 1;
+    if (damping < 1) {
+        node.vx *= damping;
+        node.vy *= damping;
+    }
+
+    node.orbitRadius = clamp(dist, bounds.inner, bounds.outer);
 }
 
 export function calculateBTCWeight(btc: BTCData, mode: WeightMode): number {

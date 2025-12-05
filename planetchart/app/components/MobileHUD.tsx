@@ -2,6 +2,7 @@
 
 import { memo, useState, useCallback } from "react";
 import type { GalaxyNode, WeightMode } from "@/types/galaxy";
+import type { QualityMode } from "@/types/performance";
 
 interface MobileHUDProps {
   planets: GalaxyNode[];
@@ -16,6 +17,8 @@ interface MobileHUDProps {
   onToggleStables: () => void;
   onToggleWrapped: () => void;
   followingInfo: { symbol: string; type: string } | null;
+  qualityMode: QualityMode;
+  qualityReasons: string[];
 }
 
 /**
@@ -39,6 +42,8 @@ const MobileHUD = memo(({
   onToggleStables,
   onToggleWrapped,
   followingInfo,
+  qualityMode,
+  qualityReasons,
 }: MobileHUDProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'chains' | 'settings'>('chains');
@@ -222,6 +227,26 @@ const MobileHUD = memo(({
                         </button>
                       ))}
                     </div>
+                  </div>
+
+                  {/* Rendering profile */}
+                  <div className="p-4 rounded-2xl bg-white/5 border border-white/10">
+                    <div className="text-xs text-white/50 mb-1 uppercase tracking-wide">
+                      Rendering Profile
+                    </div>
+                    <div className={`text-sm font-semibold ${qualityMode === 'lite' ? 'text-amber-200' : 'text-emerald-200'}`}>
+                      {qualityMode === 'lite' ? 'Lite Mode' : 'Full Fidelity'}
+                    </div>
+                    {qualityMode === 'lite' && qualityReasons.length > 0 && (
+                      <ul className="mt-2 text-[11px] text-white/60 list-disc pl-4 space-y-1">
+                        {qualityReasons.slice(0, 3).map((reason) => (
+                          <li key={reason}>{reason}</li>
+                        ))}
+                        {qualityReasons.length > 3 && (
+                          <li className="text-white/40">+{qualityReasons.length - 3} more</li>
+                        )}
+                      </ul>
+                    )}
                   </div>
 
                   {/* Token Filters */}
