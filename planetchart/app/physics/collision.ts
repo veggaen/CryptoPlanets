@@ -481,7 +481,7 @@ export type Particle = {
 
 // Global particle pool
 let particles: Particle[] = [];
-let activeParticleCap = collisionConfig.maxParticles;
+let activeParticleCap: number = collisionConfig.maxParticles;
 
 /**
  * Update particle budget at runtime based on quality mode
