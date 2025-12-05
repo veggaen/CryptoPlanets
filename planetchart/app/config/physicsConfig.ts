@@ -10,23 +10,23 @@ export const physicsConfig = {
     railSnapLerp: 0.1,                // How aggressively nodes slide back to rail when calm (1 = instant)
 
     // ===== Orbital Motion (Deterministic) =====
-    baseChainAngularVel: 0.0002,    // Base angular velocity for chain orbits (radians/frame)
-    baseTokenAngularVel: 0.0008,    // Moons orbit at comfortable visible speed
-    orbitSpeedFalloff: 0.2,         // How much orbit speed decreases with distance
+    baseChainAngularVel: 0.00014,   // Lowered to ease planet drift
+    baseTokenAngularVel: 0.0005,    // Moons orbit at calmer pace
+    orbitSpeedFalloff: 0.28,        // Sharper falloff keeps distant objects slower
 
     // ===== Gravity & Physics (N-Body Lite) =====
     sunGravity: 0.015,              // REDUCED - gentle pull, not a vortex
     planetGravity: 0.008,           // REDUCED - planets gently pull moons
     moonGravity: 0.002,             // REDUCED - moons gently pull asteroids
-    friction: 0.96,                 // MORE friction for stability (4% loss per tick)
-    moonFriction: 0.88,             // HEAVY friction for moons (12% loss) - prevents bounce storms
+    friction: 0.94,                 // Added drag to bleed energy faster
+    moonFriction: 0.84,             // More loss for moons to prevent whiplash
     repulsion: 8.0,                 // STRONG repulsion for 9x scale - prevent pass-through
     repulsionCrossChain: 2.0,       // Cross-chain repulsion - visible but weaker
     damper: 0.85,                   // Higher damping = more grinding, less bouncing
 
     // ===== Stability & Limits =====
-    orbitCorrectionStrength: 0.04,  // 80/20 BLEND: 4% correction per tick pulls back to orbit
-    maxVelocity: 4,                 // LOWER cap - prevent explosions, keep motion slow/cosmic
+    orbitCorrectionStrength: 0.05,  // Slightly stronger correction to stop over-shoots
+    maxVelocity: 3.2,               // Lower cap to avoid sudden darts
 
     // ===== Planetary Field (Option B) =====
     fieldInnerPadding: 140,         // Gap from planet surface to moon field start (px)
@@ -72,19 +72,19 @@ export const physicsConfig = {
 
     // ===== Token/Moon Orbit ===== - 9x SCALE
     baseMoonOrbitRadius: 1080,      // Starting radius for moon belt from planet edge (px) - 9x
-    moonOrbitRadiusVariance: 720,   // Random variance in orbit radius (px) - 9x creates messy field
-    moonOrbitEccentricity: 0.25,    // Max orbit eccentricity (0 = circle, 1 = very elliptical)
+    moonOrbitRadiusVariance: 600,   // Tighten variance to keep belts cohesive
+    moonOrbitEccentricity: 0.14,    // Further trim eccentricity to reduce erratic swings
 
     // ===== Moon Ring System =====
     moonSlotsPerRing: 8,            // Slots per ring for moon distribution
     moonRingStep: 540,              // Distance between moon rings (px) - 9x spread
     
     // ===== Moon Physics (Asteroid Field) =====
-    moonGravitationalPull: 0.0008,  // How much moons pull on each other
-    moonOrbitCorrection: 0.002,     // Gentle pull back toward base orbit
-    moonMaxOrbitDeviation: 2000,    // Max distance from base orbit before strong pull back (px)
-    moonVelocityDamping: 0.995,     // Slight velocity decay per tick
-    moonAngleWobble: 0.15,          // Random wobble in orbit angle per tick
+    moonGravitationalPull: 0.00055, // Softer cross-moon tug to avoid jitter
+    moonOrbitCorrection: 0.0024,    // Slightly stronger pull back toward base orbit
+    moonMaxOrbitDeviation: 1500,    // Clamp excursions sooner
+    moonVelocityDamping: 0.989,     // Extra damping per tick to bleed energy
+    moonAngleWobble: 0.05,          // Further reduce random wobble per tick
 
     // ===== Moons vs Meteorites =====
     maxMoonsPerPlanet: 24,          // Max moons per planet - matches tokensPerChain in dataConfig

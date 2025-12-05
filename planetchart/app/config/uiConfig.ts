@@ -57,6 +57,46 @@ export const uiConfig = {
     // ===== Performance =====
     renderThrottleMs: 16,           // Min ms between renders (60fps)
     maxVisibleTokens: 500,          // Limit total rendered tokens for performance
+
+    // ===== Node Label + Icon Display =====
+    nodeLabels: {
+        planet: {
+            alwaysShowIcon: true,
+            iconScale: 0.9,          // Portion of planet diameter used for icon size
+            iconMin: 64,
+            tickerScale: 0.14,       // Portion of diameter for ticker font size
+            tickerMin: 160,
+            priceScale: 0.08,
+            priceMin: 96,
+            ratioScale: 0.06,
+            ratioMin: 72,
+            metricScale: 0.09,
+            metricMin: 90,
+        },
+        moon: {
+            alwaysShowIcon: true,
+            iconScale: 0.75,
+            iconMin: 28,
+            tickerScale: 0.28,       // Applied before ticker length adjustment
+            tickerMin: 12,
+            tickerMax: 48,
+            priceScale: 0.75,        // Multiplier relative to ticker font
+            priceMin: 10,
+            priceMax: 36,
+            ratioScale: 0.55,
+            ratioMin: 8,
+            ratioMax: 28,
+            metricScale: 0.6,
+            metricMin: 9,
+            metricMax: 30,
+        },
+    },
+
+    // ===== Low-zoom Culling =====
+    moonLowZoomCull: {
+        zoomThreshold: 0.035,        // When zoom is below this, trim moon DOM load
+        maxVisibleMoons: 60,         // Keep only the largest N moons at low zoom
+    },
 } as const;
 
 // Type helper

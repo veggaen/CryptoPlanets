@@ -7,13 +7,13 @@ import { uiConfig } from "@/config/uiConfig";
 // ===== CAMERA CONFIGURATION =====
 const CAMERA_CONFIG = {
     // Follow mode settings
-    followLerpSpeed: 0.12,        // How fast camera catches up to target (0-1, higher = faster)
-    followZoomDistance: 0.15,     // Zoom level when following a planet
-    followSunZoomDistance: 0.08,  // Zoom level when following the sun
+    followLerpSpeed: 0.08,        // Lowered for calmer easing
+    followZoomDistance: 0.13,     // Slightly wider framing while following a planet
+    followSunZoomDistance: 0.07,  // Wider framing on the sun
     
     // Transition smoothing
-    transitionDuration: 1000,     // ms for smooth zoom transitions
-    zoomLerpSpeed: 0.15,          // Zoom interpolation speed - SMOOTH zoom while following
+    transitionDuration: 1200,     // Longer transition for less snap
+    zoomLerpSpeed: 0.11,          // Slower zoom interpolation
     
     // Zoom limits - EXPANDED for full galaxy view
     minZoom: 0.003,               // Allow extreme zoom out to see entire galaxy
@@ -23,9 +23,9 @@ const CAMERA_CONFIG = {
     orbitViewOffset: 0,           // No offset = planet centered perfectly
     
     // Cinematic transition settings - SMOOTH ARC
-    cinematicDuration: 3500,      // Total transition time in ms (slower, more cinematic)
+    cinematicDuration: 4200,      // Extended for gentler arcs
     galaxyOverviewZoom: 0.012,    // Zoom level at apex of the arc
-    arcHeight: 0.6,               // How much to "lift" the camera path (0-1, higher = more arc)
+    arcHeight: 0.5,               // Slightly flatter path for calmer feel
 };
 
 export { CAMERA_CONFIG };

@@ -14,6 +14,7 @@ import { CAMERA_CONFIG, updateFollowCamera, calculateIdealZoom, createCinematicT
 import { getParticles, getShakeOffset, Particle, setParticleBudget, collisionConfig } from "@/physics/collision";
 import { uiConfig } from "@/config/uiConfig";
 import type { QualityMode } from "@/types/performance";
+import { formatCompactUSD, formatPercentChange } from "@/utils/formatters";
 import Starfield from "./Starfield";
 import Footer from "./Footer";
 import GalaxyHUD from "./GalaxyHUD";
@@ -33,6 +34,130 @@ const QUALITY_BUDGETS = {
 
 const RENDER_FRAME_INTERVAL = 1000 / 30; // 30 FPS cap for React renders
 const VIEW_CULL_PADDING_PX = 220;
+const METRIC_LABELS: Record<WeightMode, string> = {
+  MarketCap: "MCap",
+  TVL: "TVL",
+  Volume24h: "24h Vol",
+  Change24h: "24h Δ",
+  Change7d: "7d Δ",
+  Change30d: "30d Δ",
+};
+
+type DetailTier = "minimal" | "medium" | "full";
+
+const DETAIL_THRESHOLDS = {
+  planet: { full: 0.055, medium: 0.04 },
+  moon: { full: 0.045, medium: 0.032 },
+} as const;
+
+const planetLabelConfig = uiConfig.nodeLabels.planet;
+const moonLabelConfig = uiConfig.nodeLabels.moon;
+const moonCullConfig = uiConfig.moonLowZoomCull;
+
+function getDetailTier(zoom: number, thresholds: { full: number; medium: number }): DetailTier {
+  if (zoom >= thresholds.full) {
+    return "full";
+  }
+  if (zoom >= thresholds.medium) {
+    return "medium";
+  }
+  return "minimal";
+}
+
+type MetricTrend = "up" | "down" | "neutral";
+type NodeMetricDisplay = {
+  label: string;
+  text: string;
+  accent: string;
+  trend: MetricTrend;
+};
+
+const POSITIVE_ACCENT = "#86efac";
+const NEGATIVE_ACCENT = "#f87171";
+const NEUTRAL_ACCENT = "#f1f5f9";
+const ZERO_ACCENT = "#facc15";
+const PERF_SUMMARY_WINDOW_MS = 10_000;
+const CLICK_DRAG_TOLERANCE_PX = 4;
+
+function isUiEventTarget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && Boolean(target.closest('[data-menu-ignore="true"]'));
+}
+
+type PerfSample = {
+  timestamp: number;
+  fps: number;
+  nodes: number;
+  visibleNodes: number;
+  particles: number;
+  physicsMs: number;
+  cameraMs: number;
+};
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function resolveMetricValue(node: GalaxyNode, mode: WeightMode): number | null {
+  const data = node.data as Record<string, unknown>;
+
+  switch (mode) {
+    case "MarketCap": {
+      return asNumber(data.marketCap) ?? asNumber(node.weight) ?? null;
+    }
+    case "TVL": {
+      const tvl = asNumber(data.tvl);
+      const liquidity = asNumber(data.liquidity);
+      const marketCap = asNumber(data.marketCap);
+      if (node.type === "planet" && tvl !== null) return tvl;
+      if (node.type === "moon" && liquidity !== null) return liquidity;
+      if (node.type === "sun" && marketCap !== null) return marketCap;
+      return tvl ?? liquidity ?? marketCap ?? null;
+    }
+    case "Volume24h": {
+      return asNumber(data.volume24h);
+    }
+    case "Change24h": {
+      return asNumber(data.change24h);
+    }
+    case "Change7d": {
+      return asNumber(data.change7d);
+    }
+    case "Change30d": {
+      return asNumber(data.change30d);
+    }
+    default:
+      return null;
+  }
+}
+
+function getNodeMetricDisplay(node: GalaxyNode, mode: WeightMode): NodeMetricDisplay | null {
+  const rawValue = resolveMetricValue(node, mode);
+  if (rawValue === null) {
+    return null;
+  }
+
+  if (mode.startsWith("Change")) {
+    const trend: MetricTrend = rawValue > 0 ? "up" : rawValue < 0 ? "down" : "neutral";
+    const accent = trend === "up" ? POSITIVE_ACCENT : trend === "down" ? NEGATIVE_ACCENT : ZERO_ACCENT;
+    return {
+      label: METRIC_LABELS[mode],
+      text: formatPercentChange(rawValue),
+      accent,
+      trend,
+    };
+  }
+
+  return {
+    label: METRIC_LABELS[mode],
+    text: formatCompactUSD(Math.abs(rawValue)),
+    accent: NEUTRAL_ACCENT,
+    trend: "neutral",
+  };
+}
+
+function formatMetricLine(display: NodeMetricDisplay): string {
+  return display.label === "MCap" ? display.text : `${display.label}: ${display.text}`;
+}
 
 type QualityOverride = "full" | "lite" | null;
 
@@ -96,14 +221,20 @@ function evaluateQualityMode(override: QualityOverride): { mode: QualityMode; re
 
 // --- Planet/Sun Component ---
 const PlanetNode = ({ 
-  node
+  node,
+  weightMode,
+  detailLevel,
 }: { 
-  node: GalaxyNode; 
+  node: GalaxyNode;
+  weightMode: WeightMode;
+  detailLevel: number;
 }) => {
   const [isRatioHovered, setIsRatioHovered] = useState(false);
   const isSun = node.type === 'sun';
   const size = node.radius * 2;
   const glowIntensity = node.collisionGlow || 0;
+  const metricDisplay = getNodeMetricDisplay(node, weightMode);
+  const detailTier = isSun ? 'full' : getDetailTier(detailLevel, DETAIL_THRESHOLDS.planet);
 
   // Get symbol, price, and icon from data
   const symbol = ('symbol' in node.data ? node.data.symbol : null) 
@@ -147,10 +278,28 @@ const PlanetNode = ({
     sizeRatioDisplay = `${node.sizeRatio.toFixed(2)}x > ${node.nextEntitySymbol}`;
   }
 
-  const fontSize = Math.max(160, Math.round(node.radius * 0.28));
-  const priceFontSize = Math.max(96, Math.round(node.radius * 0.16));
-  const ratioFontSize = Math.max(72, Math.round(node.radius * 0.12));
-  const iconSize = Math.round(node.radius * 1.2); // Icon is 60% of diameter (120% of radius)
+  const fontSize = Math.max(planetLabelConfig.tickerMin, Math.round(size * planetLabelConfig.tickerScale));
+  const priceFontSize = Math.max(planetLabelConfig.priceMin, Math.round(size * planetLabelConfig.priceScale));
+  const ratioFontSize = Math.max(planetLabelConfig.ratioMin, Math.round(size * planetLabelConfig.ratioScale));
+  const iconSize = Math.max(planetLabelConfig.iconMin, Math.round(size * planetLabelConfig.iconScale));
+  const metricFontSize = Math.max(planetLabelConfig.metricMin, Math.round(size * planetLabelConfig.metricScale));
+  const metricColor = metricDisplay?.accent ?? '#f8fafc';
+
+  const showIcon = Boolean(icon) && (planetLabelConfig.alwaysShowIcon || detailTier !== 'minimal');
+  const showPriceDetail = detailTier !== 'minimal' && Boolean(priceDisplay);
+  const showMetricDetail = detailTier === 'full' && Boolean(metricDisplay);
+  const showRatioDetail = detailTier === 'full' && Boolean(sizeRatioDisplay);
+
+  const tickerShadow = detailTier === 'full'
+    ? '3px 3px 0 #000, -3px -3px 0 #000, 3px -3px 0 #000, -3px 3px 0 #000'
+    : detailTier === 'medium'
+      ? '2px 2px 0 #000, -2px -2px 0 #000'
+      : '1px 1px 0 #000';
+  const supportingShadow = detailTier === 'full'
+    ? '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000'
+    : detailTier === 'medium'
+      ? '1px 1px 0 #000, -1px -1px 0 #000'
+      : '1px 1px 0 #000';
 
   return (
     <div
@@ -205,7 +354,7 @@ const PlanetNode = ({
         }}
       >
         {/* Background icon - behind text, centered, 50% opacity */}
-        {icon && (
+        {showIcon && icon && (
           <img
             src={icon}
             alt=""
@@ -228,7 +377,7 @@ const PlanetNode = ({
             fontSize,
             fontWeight: 800,
             color: uiConfig.planetTickerColor,
-            textShadow: '3px 3px 0 #000, -3px -3px 0 #000, 3px -3px 0 #000, -3px 3px 0 #000',
+            textShadow: tickerShadow,
             fontFamily: 'system-ui, -apple-system, sans-serif',
             letterSpacing: '-0.02em',
             lineHeight: 1,
@@ -238,13 +387,13 @@ const PlanetNode = ({
         >
           {symbol}
         </span>
-        {priceDisplay && (
+        {showPriceDetail && priceDisplay && (
           <span
             style={{
               fontSize: priceFontSize,
               fontWeight: 700,
               color: uiConfig.planetPriceColor,
-              textShadow: '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000',
+              textShadow: supportingShadow,
               fontFamily: 'system-ui, -apple-system, sans-serif',
               marginTop: 8,
               lineHeight: 1,
@@ -255,8 +404,26 @@ const PlanetNode = ({
             {priceDisplay}
           </span>
         )}
+        {showMetricDetail && metricDisplay && (
+          <span
+            style={{
+              fontSize: metricFontSize,
+              fontWeight: 700,
+              color: metricColor,
+              textShadow: supportingShadow,
+              fontFamily: 'system-ui, -apple-system, sans-serif',
+              marginTop: 6,
+              lineHeight: 1,
+              zIndex: 1,
+              position: 'relative',
+              letterSpacing: '0.01em',
+            }}
+          >
+            {formatMetricLine(metricDisplay)}
+          </span>
+        )}
         {/* Size ratio display - hover to toggle view */}
-        {sizeRatioDisplay && (
+        {showRatioDetail && sizeRatioDisplay && (
           <span
             onMouseEnter={hasAlternateView ? () => setIsRatioHovered(true) : undefined}
             onMouseLeave={hasAlternateView ? () => setIsRatioHovered(false) : undefined}
@@ -264,7 +431,7 @@ const PlanetNode = ({
               fontSize: ratioFontSize,
               fontWeight: 700,
               color: showSunMultiplier ? '#f59e0b' : uiConfig.planetSizeRatioColor,
-              textShadow: '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000',
+              textShadow: supportingShadow,
               fontFamily: 'system-ui, -apple-system, sans-serif',
               marginTop: 8,
               lineHeight: 1,
@@ -286,9 +453,13 @@ const PlanetNode = ({
 
 // --- Moon Component ---
 const MoonNode = ({ 
-  node
+  node,
+  weightMode,
+  detailLevel,
 }: { 
   node: GalaxyNode;
+  weightMode: WeightMode;
+  detailLevel: number;
 }) => {
   const [isRatioHovered, setIsRatioHovered] = useState(false);
   const size = node.radius * 2; // diameter
@@ -296,6 +467,8 @@ const MoonNode = ({
   const price = ('price' in node.data && typeof node.data.price === 'number') ? node.data.price : null;
   const icon = ('icon' in node.data && typeof node.data.icon === 'string') ? node.data.icon : null;
   const glowIntensity = node.collisionGlow || 0;
+  const metricDisplay = getNodeMetricDisplay(node, weightMode);
+  const detailTier = getDetailTier(detailLevel, DETAIL_THRESHOLDS.moon);
 
   const formatPrice = (p: number) => {
     if (p >= 1000) return `$${(p / 1000).toFixed(1)}k`;
@@ -319,16 +492,30 @@ const MoonNode = ({
   // Base font size scales with diameter - use 28% of diameter as baseline
   // Longer tickers get slightly smaller font but not as aggressively
   const lengthFactor = Math.max(0.6, 1 - (tickerLen - 3) * 0.06); // 3-char = 1.0, 5-char = 0.88, 7-char = 0.76
-  const baseFontSize = size * 0.28 * lengthFactor;
-  const fontSize = Math.max(12, Math.min(48, Math.round(baseFontSize)));
-  const priceFontSize = Math.max(10, Math.min(36, Math.round(fontSize * 0.75)));
-  const ratioFontSize = Math.max(8, Math.min(28, Math.round(fontSize * 0.55)));
+  const baseFontSize = size * moonLabelConfig.tickerScale * lengthFactor;
+  const fontSize = Math.max(
+    moonLabelConfig.tickerMin,
+    Math.min(moonLabelConfig.tickerMax, Math.round(baseFontSize))
+  );
+  const priceFontSize = Math.max(
+    moonLabelConfig.priceMin,
+    Math.min(moonLabelConfig.priceMax, Math.round(fontSize * moonLabelConfig.priceScale))
+  );
+  const ratioFontSize = Math.max(
+    moonLabelConfig.ratioMin,
+    Math.min(moonLabelConfig.ratioMax, Math.round(fontSize * moonLabelConfig.ratioScale))
+  );
+  const metricFontSize = Math.max(
+    moonLabelConfig.metricMin,
+    Math.min(moonLabelConfig.metricMax, Math.round(fontSize * moonLabelConfig.metricScale))
+  );
   
-  // Icon scales with moon size - 65% of diameter for good visibility
-  const iconSize = Math.max(20, Math.round(size * 0.65));
+  // Icon scales with moon size
+  const iconSize = Math.max(moonLabelConfig.iconMin, Math.round(size * moonLabelConfig.iconScale));
   
   // Only show price on larger moons where it's readable
-  const showPrice = size > 35 && fontSize >= 12;
+  const canShowPrice = size > 35 && fontSize >= 12;
+  const canShowMetric = Boolean(metricDisplay) && size > 30;
   
   // Size ratio display - hover to toggle between "x > next" and "x to BTC"
   // Check if this node CAN show the alternate "x to BTC" view
@@ -346,6 +533,20 @@ const MoonNode = ({
     // Show default "x > next" mode
     sizeRatioDisplay = `${node.sizeRatio.toFixed(2)}x > ${node.nextEntitySymbol}`;
   }
+
+  const showIcon = Boolean(icon) && (moonLabelConfig.alwaysShowIcon || detailTier !== 'minimal');
+  const showPriceDetail = detailTier !== 'minimal' && canShowPrice && price !== null;
+  const showMetricDetail = detailTier === 'full' && canShowMetric && Boolean(metricDisplay);
+  const showRatioDetail = detailTier === 'full' && Boolean(sizeRatioDisplay);
+
+  const tickerShadow = detailTier === 'full'
+    ? '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000'
+    : detailTier === 'medium'
+      ? '1px 1px 0 #000, -1px -1px 0 #000'
+      : '1px 1px 0 #000';
+  const supportingShadow = detailTier === 'full'
+    ? '1px 1px 0 #000, -1px -1px 0 #000'
+    : '1px 1px 0 #000';
 
   return (
     <div
@@ -376,7 +577,7 @@ const MoonNode = ({
         }}
       >
         {/* Background icon for moons */}
-        {icon && (
+        {showIcon && icon && (
           <img
             src={icon}
             alt=""
@@ -401,7 +602,7 @@ const MoonNode = ({
                 fontSize,
                 fontWeight: 800,
                 color: uiConfig.planetTickerColor,
-                textShadow: '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000',
+                textShadow: tickerShadow,
                 lineHeight: 1.1,
                 fontFamily: 'system-ui, -apple-system, sans-serif',
                 letterSpacing: '-0.01em',
@@ -411,13 +612,13 @@ const MoonNode = ({
             >
               {ticker}
             </span>
-            {showPrice && price !== null && (
+            {showPriceDetail && price !== null && (
               <span
                 style={{
                   fontSize: priceFontSize,
                   fontWeight: 700,
                   color: uiConfig.planetPriceColor,
-                  textShadow: '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000',
+                  textShadow: supportingShadow,
                   lineHeight: 1.1,
                   fontFamily: 'system-ui, -apple-system, sans-serif',
                   zIndex: 1,
@@ -427,7 +628,25 @@ const MoonNode = ({
                 {formatPrice(price)}
               </span>
             )}
-            {showPrice && sizeRatioDisplay && (
+            {showMetricDetail && metricDisplay && (
+              <span
+                style={{
+                  fontSize: metricFontSize,
+                  fontWeight: 600,
+                  color: metricDisplay.accent,
+                  textShadow: supportingShadow,
+                  lineHeight: 1,
+                  fontFamily: 'system-ui, -apple-system, sans-serif',
+                  zIndex: 1,
+                  position: 'relative',
+                  marginTop: 2,
+                  letterSpacing: '0.01em',
+                }}
+              >
+                {formatMetricLine(metricDisplay)}
+              </span>
+            )}
+            {showRatioDetail && sizeRatioDisplay && (
               <span
                 onMouseEnter={hasAlternateView ? () => setIsRatioHovered(true) : undefined}
                 onMouseLeave={hasAlternateView ? () => setIsRatioHovered(false) : undefined}
@@ -435,7 +654,7 @@ const MoonNode = ({
                   fontSize: ratioFontSize,
                   fontWeight: 600,
                   color: showSunMultiplier ? '#f59e0b' : uiConfig.planetSizeRatioColor,
-                  textShadow: '2px 2px 0 #000, -2px -2px 0 #000, 2px -2px 0 #000, -2px 2px 0 #000',
+                  textShadow: supportingShadow,
                   lineHeight: 1,
                   fontFamily: 'system-ui, -apple-system, sans-serif',
                   zIndex: 100,
@@ -563,6 +782,7 @@ export default function CryptoPlanets() {
   const camera = cameraRef.current;
   const [isLoading, setIsLoading] = useState(true);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [perfCopied, setPerfCopied] = useState(false);
   
   // Token filter state (default: hide stablecoins and wrapped)
   const [hideStables, setHideStables] = useState(true);
@@ -572,9 +792,20 @@ export default function CryptoPlanets() {
   const [perfStats, setPerfStats] = useState({
     fps: 0,
     nodes: 0,
+    visibleNodes: 0,
     particles: 0,
     physicsMs: 0,
     cameraMs: 0,
+  });
+  const [perfSummary, setPerfSummary] = useState({
+    sampleCount: 0,
+    windowMs: 0,
+    avgFps: 0,
+    minFps: 0,
+    maxFps: 0,
+    avgPhysics: 0,
+    maxPhysics: 0,
+    avgVisibleNodes: 0,
   });
   const [viewportSize, setViewportSize] = useState(() => ({
     width: typeof window === "undefined" ? 1920 : window.innerWidth,
@@ -586,6 +817,10 @@ export default function CryptoPlanets() {
     lastPhysics: 0,
     lastCamera: 0,
   });
+  const perfSamplesRef = useRef<PerfSample[]>([]);
+  const latestVisibleNodesRef = useRef(0);
+  const perfSummaryRef = useRef(perfSummary);
+  const perfCopyTimeoutRef = useRef<number | null>(null);
   const [deviceInfo, setDeviceInfo] = useState<{ cores: number | null; dpr: number }>({
     cores: null,
     dpr: 1,
@@ -816,15 +1051,106 @@ export default function CryptoPlanets() {
       const fps = sample.frames / Math.max(elapsed, 0.001);
       sample.frames = 0;
       sample.lastTimestamp = now;
+      const nodes = galaxyStateRef.current?.nodes.length ?? 0;
+      const visibleNodes = latestVisibleNodesRef.current;
+      const particles = getParticles().length;
       setPerfStats({
         fps,
-        nodes: galaxyStateRef.current?.nodes.length ?? 0,
-        particles: getParticles().length,
+        nodes,
+        visibleNodes,
+        particles,
         physicsMs,
         cameraMs,
       });
+      const history = perfSamplesRef.current;
+      history.push({
+        timestamp: now,
+        fps,
+        nodes,
+        visibleNodes,
+        particles,
+        physicsMs,
+        cameraMs,
+      });
+      const cutoff = now - PERF_SUMMARY_WINDOW_MS;
+      while (history.length && history[0].timestamp < cutoff) {
+        history.shift();
+      }
+      if (history.length) {
+        let fpsTotal = 0;
+        let physicsTotal = 0;
+        let visibleTotal = 0;
+        let minFps = Number.POSITIVE_INFINITY;
+        let maxFps = 0;
+        let maxPhysics = 0;
+        for (const entry of history) {
+          fpsTotal += entry.fps;
+          physicsTotal += entry.physicsMs;
+          visibleTotal += entry.visibleNodes;
+          if (entry.fps < minFps) minFps = entry.fps;
+          if (entry.fps > maxFps) maxFps = entry.fps;
+          if (entry.physicsMs > maxPhysics) maxPhysics = entry.physicsMs;
+        }
+        setPerfSummary({
+          sampleCount: history.length,
+          windowMs: history.length > 1 ? history[history.length - 1].timestamp - history[0].timestamp : 0,
+          avgFps: fpsTotal / history.length,
+          minFps: minFps === Number.POSITIVE_INFINITY ? 0 : minFps,
+          maxFps,
+          avgPhysics: physicsTotal / history.length,
+          maxPhysics,
+          avgVisibleNodes: visibleTotal / history.length,
+        });
+      }
     }
   }, [showPerfOverlay]);
+
+  useEffect(() => {
+    perfSummaryRef.current = perfSummary;
+  }, [perfSummary]);
+
+  useEffect(() => {
+    return () => {
+      if (perfCopyTimeoutRef.current) {
+        clearTimeout(perfCopyTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const handleCopyPerfSummary = useCallback(() => {
+    const summary = perfSummaryRef.current;
+    if (!summary.sampleCount) {
+      console.warn('No performance samples recorded yet. Open the PERF overlay to begin sampling.');
+      return;
+    }
+    const windowSeconds = Math.max(summary.windowMs, PERF_SUMMARY_WINDOW_MS) / 1000;
+    const text = [
+      `Perf summary (${windowSeconds.toFixed(1)}s, ${summary.sampleCount} samples)`,
+      `FPS avg ${summary.avgFps.toFixed(1)} | min ${summary.minFps.toFixed(1)} | max ${summary.maxFps.toFixed(1)}`,
+      `Physics avg ${summary.avgPhysics.toFixed(2)}ms | peak ${summary.maxPhysics.toFixed(2)}ms`,
+      `Visible nodes avg ${summary.avgVisibleNodes.toFixed(0)}`,
+    ].join('\n');
+    console.log(text);
+
+    const acknowledgeCopy = () => {
+      setPerfCopied(true);
+      if (perfCopyTimeoutRef.current) {
+        clearTimeout(perfCopyTimeoutRef.current);
+      }
+      perfCopyTimeoutRef.current = window.setTimeout(() => setPerfCopied(false), 1800);
+    };
+
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(text)
+        .then(acknowledgeCopy)
+        .catch(() => {
+          console.warn('Unable to copy performance summary to clipboard.');
+          acknowledgeCopy();
+        });
+    } else {
+      acknowledgeCopy();
+    }
+  }, []);
 
   // Read URL params on mount to get initial follow target
   useEffect(() => {
@@ -1050,6 +1376,30 @@ export default function CryptoPlanets() {
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
     const idealZoom = calculateIdealZoom(node.radius, node.type as 'sun' | 'planet' | 'moon', viewportWidth, viewportHeight);
+
+    const cameraSnapshot = cameraRef.current;
+    const halfWidth = viewportWidth / 2;
+    const halfHeight = viewportHeight / 2;
+    const screenX = node.x * cameraSnapshot.zoom + cameraSnapshot.x;
+    const screenY = node.y * cameraSnapshot.zoom + cameraSnapshot.y;
+    const screenRadius = Math.max(node.radius * cameraSnapshot.zoom, 40);
+    const margin = 120;
+    const overlapHoriz = screenX + screenRadius > -halfWidth + margin && screenX - screenRadius < halfWidth - margin;
+    const overlapVert = screenY + screenRadius > -halfHeight + margin && screenY - screenRadius < halfHeight - margin;
+    const screenDistance = Math.hypot(screenX, screenY);
+    const nodeCloseToCenter = screenDistance < Math.min(halfWidth, halfHeight) * 0.35;
+    const nodeWithinView = nodeCloseToCenter || (overlapHoriz && overlapVert);
+
+    const zoomCloseEnough = Math.abs(cameraSnapshot.zoom - idealZoom) <= Math.max(idealZoom * 0.6, 0.02);
+    const alreadyFollowing = followingIdRef.current === nodeId && !transitionRef.current?.active;
+
+    if ((nodeWithinView && zoomCloseEnough) || alreadyFollowing) {
+      transitionRef.current = null;
+      setIsTransitioning(false);
+      setFollowingId(nodeId);
+      setTargetZoom(idealZoom);
+      return;
+    }
     
     // Start cinematic transition
     transitionRef.current = createCinematicTransition(
@@ -1116,11 +1466,68 @@ export default function CryptoPlanets() {
     return () => window.removeEventListener('wheel', handleWheel);
   }, []);
 
+  const openRadialMenuAt = useCallback((clientX: number, clientY: number) => {
+    const snapshot = galaxyStateRef.current;
+    if (!snapshot) return false;
+
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return false;
+
+    const cameraSnapshot = cameraRef.current;
+    const centerX = rect.width / 2;
+    const centerY = rect.height / 2;
+    const screenX = clientX - rect.left - centerX;
+    const screenY = clientY - rect.top - centerY;
+    const worldX = (screenX - cameraSnapshot.x) / cameraSnapshot.zoom;
+    const worldY = (screenY - cameraSnapshot.y) / cameraSnapshot.zoom;
+
+    const allNodes = [
+      ...snapshot.moonNodes,
+      ...snapshot.planetNodes,
+      snapshot.sunNode,
+    ];
+
+    const minHitRadius = 15 / cameraSnapshot.zoom;
+
+    for (const node of allNodes) {
+      const dx = worldX - node.x;
+      const dy = worldY - node.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const hitRadius = Math.max(node.radius * 1.2, minHitRadius);
+
+      if (dist < hitRadius) {
+        const symbol = ('symbol' in node.data ? node.data.symbol : null)
+          || ('name' in node.data ? node.data.name : null)
+          || node.id.toUpperCase();
+
+        setRadialMenu({
+          isOpen: true,
+          x: clientX,
+          y: clientY,
+          nodeId: node.id,
+          nodeSymbol: symbol,
+        });
+        return true;
+      }
+    }
+
+    setRadialMenu(prev => ({ ...prev, isOpen: false }));
+    return false;
+  }, []);
+
   // Drag handling
   const [isDragging, setIsDragging] = useState(false);
   const lastMousePos = useRef({ x: 0, y: 0 });
+  const mouseDownMetaRef = useRef({ button: -1, startX: 0, startY: 0, moved: false });
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    if (isUiEventTarget(e.target)) {
+      mouseDownMetaRef.current = { button: e.button, startX: e.clientX, startY: e.clientY, moved: true };
+      return;
+    }
+
+    mouseDownMetaRef.current = { button: e.button, startX: e.clientX, startY: e.clientY, moved: e.button !== 0 };
+
     if (e.button === 0) { // Left click only
       setIsDragging(true);
       lastMousePos.current = { x: e.clientX, y: e.clientY };
@@ -1140,6 +1547,15 @@ export default function CryptoPlanets() {
     const dx = e.clientX - lastMousePos.current.x;
     const dy = e.clientY - lastMousePos.current.y;
 
+    const meta = mouseDownMetaRef.current;
+    if (meta.button === 0 && !meta.moved) {
+      const totalDx = e.clientX - meta.startX;
+      const totalDy = e.clientY - meta.startY;
+      if (Math.abs(totalDx) > CLICK_DRAG_TOLERANCE_PX || Math.abs(totalDy) > CLICK_DRAG_TOLERANCE_PX) {
+        meta.moved = true;
+      }
+    }
+
     cameraRef.current = {
       ...cameraRef.current,
       x: cameraRef.current.x + dx,
@@ -1149,8 +1565,32 @@ export default function CryptoPlanets() {
 
     lastMousePos.current = { x: e.clientX, y: e.clientY };
   }, [isDragging, followingId, isTransitioning, forceRender]);
+  
+  const handleMouseUp = useCallback((e: React.MouseEvent) => {
+    if (isUiEventTarget(e.target)) {
+      setIsDragging(false);
+      mouseDownMetaRef.current = { button: -1, startX: 0, startY: 0, moved: false };
+      return;
+    }
 
-  const handleMouseUp = useCallback(() => setIsDragging(false), []);
+    setIsDragging(false);
+
+    const meta = mouseDownMetaRef.current;
+    if (
+      meta.button === 0 &&
+      e.button === 0 &&
+      !meta.moved
+    ) {
+      openRadialMenuAt(e.clientX, e.clientY);
+    }
+
+    mouseDownMetaRef.current = { button: -1, startX: 0, startY: 0, moved: false };
+  }, [openRadialMenuAt]);
+
+  const handleMouseLeave = useCallback(() => {
+    setIsDragging(false);
+    mouseDownMetaRef.current = { button: -1, startX: 0, startY: 0, moved: false };
+  }, []);
 
   // ============================================================================
   // TOUCH GESTURE HANDLERS (Mobile)
@@ -1295,63 +1735,8 @@ export default function CryptoPlanets() {
   // Right-click context menu for sun, planets, and moons
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
-    
-    if (!galaxyStateRef.current) return;
-
-    const cameraSnapshot = cameraRef.current;
-
-    const rect = containerRef.current?.getBoundingClientRect();
-    if (!rect) return;
-
-    // Convert screen coords to world coords
-    // The transform is: translate(camera.x, camera.y) scale(camera.zoom) with origin at center
-    // World (0,0) is at the center of the viewport (where the sun lives)
-    
-    const centerX = rect.width / 2;
-    const centerY = rect.height / 2;
-    const screenX = e.clientX - rect.left - centerX;
-    const screenY = e.clientY - rect.top - centerY;
-    const worldX = (screenX - cameraSnapshot.x) / cameraSnapshot.zoom;
-    const worldY = (screenY - cameraSnapshot.y) / cameraSnapshot.zoom;
-
-    // Check nodes in order: moons first (smallest), then planets, then sun
-    // This ensures smaller overlapping objects get priority
-    const allNodes = [
-      ...galaxyStateRef.current.moonNodes,
-      ...galaxyStateRef.current.planetNodes,
-      galaxyStateRef.current.sunNode,
-    ];
-    
-    // Minimum hit tolerance for very small objects (in world units)
-    const minHitRadius = 15 / cameraSnapshot.zoom;
-    
-    for (const node of allNodes) {
-      const dx = worldX - node.x;
-      const dy = worldY - node.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      
-      // Use larger of node radius or minimum hit radius for easier clicking
-      const hitRadius = Math.max(node.radius * 1.2, minHitRadius);
-      
-      if (dist < hitRadius) {
-        const symbol = ('symbol' in node.data ? node.data.symbol : null)
-          || ('name' in node.data ? node.data.name : null)
-          || node.id.toUpperCase();
-        
-        setRadialMenu({
-          isOpen: true,
-          x: e.clientX,
-          y: e.clientY,
-          nodeId: node.id,
-          nodeSymbol: symbol,
-        });
-        return;
-      }
-    }
-    
-    // Clicked on empty space - close menu if open
-    setRadialMenu(prev => ({ ...prev, isOpen: false }));
-  }, []);
+    openRadialMenuAt(e.clientX, e.clientY);
+  }, [openRadialMenuAt]);
 
   // Radial menu items
   const getRadialMenuItems = useCallback(() => {
@@ -1418,9 +1803,17 @@ export default function CryptoPlanets() {
   const visiblePlanets = galaxyState.planetNodes.filter((node) =>
     isCircleVisible(node.x, node.y, node.radius * 1.35)
   );
-  const visibleMoons = galaxyState.moonNodes.filter((node) =>
+  let visibleMoons = galaxyState.moonNodes.filter((node) =>
     isCircleVisible(node.x, node.y, node.radius * 1.5)
   );
+  if (
+    camera.zoom < moonCullConfig.zoomThreshold &&
+    visibleMoons.length > moonCullConfig.maxVisibleMoons
+  ) {
+    visibleMoons = [...visibleMoons]
+      .sort((a, b) => (b.radius || 0) - (a.radius || 0))
+      .slice(0, moonCullConfig.maxVisibleMoons);
+  }
   const visibleOrbitRings = galaxyState.planetNodes.filter((node) =>
     isCircleVisible(0, 0, node.orbitRadius + node.radius)
   );
@@ -1428,6 +1821,7 @@ export default function CryptoPlanets() {
     isCircleVisible(particle.x, particle.y, particle.size)
   );
   const visibleNodeCount = 1 + visiblePlanets.length + visibleMoons.length;
+  latestVisibleNodesRef.current = visibleNodeCount;
 
   return (
     <div
@@ -1436,7 +1830,7 @@ export default function CryptoPlanets() {
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseUp}
+      onMouseLeave={handleMouseLeave}
       onContextMenu={handleContextMenu}
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
@@ -1471,6 +1865,8 @@ export default function CryptoPlanets() {
           <PlanetNode 
             key={galaxyState.sunNode.id} 
             node={galaxyState.sunNode}
+            weightMode={weightMode}
+            detailLevel={camera.zoom}
           />
 
           {/* Planets */}
@@ -1478,6 +1874,8 @@ export default function CryptoPlanets() {
             <PlanetNode 
               key={node.id} 
               node={node}
+              weightMode={weightMode}
+              detailLevel={camera.zoom}
             />
           ))}
 
@@ -1486,6 +1884,8 @@ export default function CryptoPlanets() {
             <MoonNode 
               key={node.id} 
               node={node}
+              weightMode={weightMode}
+              detailLevel={camera.zoom}
             />
           ))}
 
@@ -1496,66 +1896,72 @@ export default function CryptoPlanets() {
 
       {/* Galaxy HUD - Chain Navigation (Desktop only) */}
       {!isMobile && (
-        <GalaxyHUD
-          planets={galaxyState.planetNodes}
-          sun={galaxyState.sunNode}
-          followingId={followingId}
-          onFollowPlanet={handleFollowPlanet}
-          zoom={camera.zoom}
-          qualityMode={qualityMode}
-          qualityReasons={qualityReasons}
-        />
+        <div data-menu-ignore="true">
+          <GalaxyHUD
+            planets={galaxyState.planetNodes}
+            sun={galaxyState.sunNode}
+            followingId={followingId}
+            onFollowPlanet={handleFollowPlanet}
+            zoom={camera.zoom}
+            qualityMode={qualityMode}
+            qualityReasons={qualityReasons}
+          />
+        </div>
       )}
       
       {/* Mobile HUD */}
       {isMobile && (
-        <MobileHUD
-          planets={galaxyState.planetNodes}
-          sun={galaxyState.sunNode}
-          followingId={followingId}
-          onFollowPlanet={handleFollowPlanet}
-          zoom={camera.zoom}
-          weightMode={weightMode}
-          onWeightModeChange={(newMode) => {
-            setWeightMode(newMode);
-            const url = new URL(window.location.href);
-            if (newMode !== 'MarketCap') {
-              url.searchParams.set('metric', newMode);
-            } else {
-              url.searchParams.delete('metric');
-            }
-            window.history.replaceState({}, '', url.toString());
-          }}
-          hideStables={hideStables}
-          hideWrapped={hideWrapped}
-          onToggleStables={() => setHideStables(!hideStables)}
-          onToggleWrapped={() => setHideWrapped(!hideWrapped)}
-          followingInfo={followingInfo}
-          qualityMode={qualityMode}
-          qualityReasons={qualityReasons}
-        />
+        <div data-menu-ignore="true">
+          <MobileHUD
+            planets={galaxyState.planetNodes}
+            sun={galaxyState.sunNode}
+            followingId={followingId}
+            onFollowPlanet={handleFollowPlanet}
+            zoom={camera.zoom}
+            weightMode={weightMode}
+            onWeightModeChange={(newMode) => {
+              setWeightMode(newMode);
+              const url = new URL(window.location.href);
+              if (newMode !== 'MarketCap') {
+                url.searchParams.set('metric', newMode);
+              } else {
+                url.searchParams.delete('metric');
+              }
+              window.history.replaceState({}, '', url.toString());
+            }}
+            hideStables={hideStables}
+            hideWrapped={hideWrapped}
+            onToggleStables={() => setHideStables(!hideStables)}
+            onToggleWrapped={() => setHideWrapped(!hideWrapped)}
+            followingInfo={followingInfo}
+            qualityMode={qualityMode}
+            qualityReasons={qualityReasons}
+          />
+        </div>
       )}
 
       {/* Radial Context Menu (Desktop only - mobile uses tap menu) */}
       {!isMobile && (
-        <RadialMenu
-          isOpen={radialMenu.isOpen}
-          x={radialMenu.x}
-          y={radialMenu.y}
-          items={getRadialMenuItems()}
-          onClose={() => setRadialMenu(prev => ({ ...prev, isOpen: false }))}
-          title={radialMenu.nodeSymbol}
-        />
+        <div data-menu-ignore="true">
+          <RadialMenu
+            isOpen={radialMenu.isOpen}
+            x={radialMenu.x}
+            y={radialMenu.y}
+            items={getRadialMenuItems()}
+            onClose={() => setRadialMenu(prev => ({ ...prev, isOpen: false }))}
+            title={radialMenu.nodeSymbol}
+          />
+        </div>
       )}
 
       {/* UI Overlay (Desktop only) */}
       {!isMobile && (
-        <div className="absolute top-0 left-0 w-full h-full pointer-events-none p-6 flex flex-col justify-between z-40">
+        <div data-menu-ignore="true" className="absolute top-0 left-0 w-full h-full pointer-events-none p-6 flex flex-col justify-between z-40">
           <div className="flex flex-col gap-4">
             <div className="flex items-start gap-6">
               <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 ml-48">
                 <h1 className="text-2xl font-bold text-white mb-2">Crypto Galaxy</h1>
-                <p className="text-sm text-white/60">Real-time blockchain visualization</p>
+                <p className="text-sm text-white/60">See every chain and token at its true-to-scale footprint across the crypto galaxy.</p>
               </div>
 
               <div className="ml-auto flex flex-col items-end gap-3">
@@ -1692,7 +2098,7 @@ export default function CryptoPlanets() {
               <div>🖱️ Drag to pan {(followingId || isTransitioning) && <span className="text-yellow-400">(cancels)</span>}</div>
               <div>🔍 Scroll to zoom</div>
               <div>👆 Click chain in HUD for cinematic travel</div>
-              <div>🖱️ Right-click any object for menu</div>
+              <div>🖱️ Click or right-click any object for menu</div>
             </div>
             <div className="text-xs mt-2">
               {isTransitioning ? (
@@ -1717,23 +2123,53 @@ export default function CryptoPlanets() {
       )}
 
       {/* Footer (Desktop only) */}
-      {!isMobile && <Footer />}
+      {!isMobile && (
+        <div data-menu-ignore="true">
+          <Footer />
+        </div>
+      )}
 
       {showPerfOverlay && !isMobile && (
-        <div className="fixed bottom-6 right-6 z-50 pointer-events-none">
+        <div data-menu-ignore="true" className="fixed bottom-6 right-6 z-50 pointer-events-none">
           <div className="bg-black/70 text-white rounded-2xl px-5 py-4 border border-white/20 shadow-2xl w-64">
             <div className="text-xs uppercase tracking-[0.3em] text-white/50 mb-2">Performance</div>
             <div className="space-y-1 text-sm">
               <div className="flex justify-between"><span>FPS</span><span>{perfStats.fps.toFixed(1)}</span></div>
               <div className="flex justify-between"><span>Nodes</span><span>{perfStats.nodes}</span></div>
-              <div className="flex justify-between"><span>Visible nodes</span><span>{visibleNodeCount}</span></div>
+              <div className="flex justify-between"><span>Visible nodes</span><span>{perfStats.visibleNodes || visibleNodeCount}</span></div>
               <div className="flex justify-between"><span>Particles</span><span>{perfStats.particles}</span></div>
               <div className="flex justify-between"><span>Physics (ms)</span><span>{perfStats.physicsMs.toFixed(2)}</span></div>
               <div className="flex justify-between"><span>Camera (ms)</span><span>{perfStats.cameraMs.toFixed(2)}</span></div>
             </div>
-            <div className="mt-3 text-[11px] text-white/50 border-t border-white/10 pt-2 flex justify-between">
+            {perfSummary.sampleCount > 1 && (
+              <div className="mt-3 text-[11px] text-white/60 border-t border-white/10 pt-2 space-y-1">
+                <div className="flex justify-between">
+                  <span>Avg FPS ({(Math.max(perfSummary.windowMs, PERF_SUMMARY_WINDOW_MS) / 1000).toFixed(1)}s)</span>
+                  <span>{perfSummary.avgFps.toFixed(1)}</span>
+                </div>
+                <div className="flex justify-between"><span>Min / Max FPS</span><span>{perfSummary.minFps.toFixed(1)} / {perfSummary.maxFps.toFixed(1)}</span></div>
+                <div className="flex justify-between"><span>Physics avg / peak</span><span>{perfSummary.avgPhysics.toFixed(2)} / {perfSummary.maxPhysics.toFixed(2)} ms</span></div>
+                <div className="flex justify-between"><span>Avg visible nodes</span><span>{perfSummary.avgVisibleNodes.toFixed(0)}</span></div>
+              </div>
+            )}
+            <div className="mt-3 flex justify-between text-[11px] text-white/50 border-t border-white/10 pt-2">
               <span>{deviceInfo.cores ? `${deviceInfo.cores} cores` : 'cores n/a'}</span>
               <span>{deviceInfo.dpr ? `dpr ${deviceInfo.dpr.toFixed(1)}` : ''}</span>
+            </div>
+            <div className="mt-2 flex justify-end items-center gap-3">
+              {perfCopied && (
+                <span className="text-[11px] uppercase tracking-[0.2em] text-emerald-300 pointer-events-none animate-pulse">
+                  Copied!
+                </span>
+              )}
+              <button
+                onClick={handleCopyPerfSummary}
+                className={`pointer-events-auto text-[11px] uppercase tracking-[0.2em] transition-colors ${
+                  perfCopied ? 'text-emerald-300' : 'text-cyan-300 hover:text-emerald-300'
+                }`}
+              >
+                {perfCopied ? 'Copied' : 'Copy summary'}
+              </button>
             </div>
           </div>
         </div>

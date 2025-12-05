@@ -37,26 +37,26 @@ export const collisionConfig = {
     proximityGlowIntensity: 0.6, // Max proximity glow (0-1)
     
     // Particles
-    maxParticles: 250,           // Performance cap
+    maxParticles: 180,           // Trimmed to cut DOM + GPU cost
     sparkLifetime: 0.6,          // seconds
     smokeLifetime: 2.0,          // seconds
     
     // Visual feedback
     glowDecay: 0.93,             // How fast glow fades per frame (slower decay)
     maxGlow: 1.0,
-    shakeIntensity: 8,           // Max camera shake pixels
-    shakeDuration: 300,          // ms
+    shakeIntensity: 4,           // Lowered to calm camera jitter
+    shakeDuration: 260,          // ms
 
     // Rail breakouts
     freeOrbitDuration: 90,       // Frames spent coasting after a collision (~1.5s)
     freeOrbitSpring: 0.013,      // Gentle radial pull back toward orbit band
     freeOrbitDamping: 0.975,     // Faster bleed to tame springbacks
     freeOrbitOrbitAssist: 0.18,  // Tangential boost to keep circular motion alive
-    tangentialJitter: 0.08,      // Subtle randomness, no more soccer passes
+    tangentialJitter: 0.045,     // Softer randomness for calmer drift
     slotReleaseDuration: 40,     // Extra frames where angular clamp is loosened
-    tangentialFriction: 0.4,     // How much side-slip is reduced per impact
+    tangentialFriction: 0.55,    // More friction to bleed chaotic slides
     maxFreeSpeed: 240,           // Clamp runaway velocity from stacked impulses
-    globalVelocityDrag: 0.995,   // Air drag applied each frame to free bodies
+    globalVelocityDrag: 0.992,   // Slightly stronger drag to slow recoveries
     freeOrbitSpringRamp: 0.25,   // 0-1: ramp spring strength across free-flight lifetime
     railBlendDuration: 45,       // Frames for smooth return to deterministic orbit
     railBlendEase: 0.15,         // How fast we ease toward the rail during blend
