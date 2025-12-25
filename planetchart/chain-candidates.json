@@ -1,0 +1,648 @@
+{
+  "topN": 40,
+  "mappedCount": 9,
+  "candidateCount": 31,
+  "candidates": [
+    {
+      "name": "Bitcoin",
+      "tvl": 6858809262.409542,
+      "tvlPretty": "$6.86B",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "bitcoin",
+      "tokenSymbol": "BTC"
+    },
+    {
+      "name": "Tron",
+      "tvl": 4405990643.177465,
+      "tvlPretty": "$4.41B",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "tron",
+      "tokenSymbol": "TRON"
+    },
+    {
+      "name": "Plasma",
+      "tvl": 2907895144.9582567,
+      "tvlPretty": "$2.91B",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "plasma",
+      "tokenSymbol": "XPL"
+    },
+    {
+      "name": "Hyperliquid L1",
+      "tvl": 1442252269.7065904,
+      "tvlPretty": "$1.44B",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "hyperliquid",
+      "tokenSymbol": "HYPE"
+    },
+    {
+      "name": "Sui",
+      "tvl": 913349626.5338352,
+      "tvlPretty": "$913.35M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "sui",
+      "tokenSymbol": "SUI"
+    },
+    {
+      "name": "Ink",
+      "tvl": 476924411.96867216,
+      "tvlPretty": "$476.92M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": null,
+      "tokenSymbol": null
+    },
+    {
+      "name": "Provenance",
+      "tvl": 449671164.03010255,
+      "tvlPretty": "$449.67M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "hash-2",
+      "tokenSymbol": "HASH"
+    },
+    {
+      "name": "Aptos",
+      "tvl": 431508970.4670438,
+      "tvlPretty": "$431.51M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "aptos",
+      "tokenSymbol": "APT"
+    },
+    {
+      "name": "Vaulta",
+      "tvl": 378059430.56484747,
+      "tvlPretty": "$378.06M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "eos",
+      "tokenSymbol": "EOS"
+    },
+    {
+      "name": "Katana",
+      "tvl": 375420323.1532471,
+      "tvlPretty": "$375.42M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": null,
+      "tokenSymbol": null
+    },
+    {
+      "name": "Mantle",
+      "tvl": 333367202.75230825,
+      "tvlPretty": "$333.37M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "mantle",
+      "tokenSymbol": "MNT"
+    },
+    {
+      "name": "OP Mainnet",
+      "tvl": 290813343.7424075,
+      "tvlPretty": "$290.81M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "optimism",
+      "tokenSymbol": "OP"
+    },
+    {
+      "name": "Berachain",
+      "tvl": 245895598.64371172,
+      "tvlPretty": "$245.90M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "berachain-bera",
+      "tokenSymbol": "BERA"
+    },
+    {
+      "name": "Starknet",
+      "tvl": 235117691.64497367,
+      "tvlPretty": "$235.12M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "starknet",
+      "tokenSymbol": "STRK"
+    },
+    {
+      "name": "Monad",
+      "tvl": 233410478.40740654,
+      "tvlPretty": "$233.41M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "monad",
+      "tokenSymbol": "MON"
+    },
+    {
+      "name": "Linea",
+      "tvl": 213764532.79796916,
+      "tvlPretty": "$213.76M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "linea",
+      "tokenSymbol": "LINEA"
+    },
+    {
+      "name": "Movement",
+      "tvl": 196645036.98511606,
+      "tvlPretty": "$196.65M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "movement",
+      "tokenSymbol": "MOVE"
+    },
+    {
+      "name": "Scroll",
+      "tvl": 191168988.3387614,
+      "tvlPretty": "$191.17M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": null,
+      "tokenSymbol": null
+    },
+    {
+      "name": "Flare",
+      "tvl": 185775020.71556005,
+      "tvlPretty": "$185.78M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "flare-networks",
+      "tokenSymbol": "FLR"
+    },
+    {
+      "name": "Sei",
+      "tvl": 182015165.90047282,
+      "tvlPretty": "$182.02M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "sei-network",
+      "tokenSymbol": "SEI"
+    },
+    {
+      "name": "Stellar",
+      "tvl": 174059595.70217806,
+      "tvlPretty": "$174.06M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "stellar",
+      "tokenSymbol": "XLM"
+    },
+    {
+      "name": "Rootstock",
+      "tvl": 171930396.53769898,
+      "tvlPretty": "$171.93M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "rootstock",
+      "tokenSymbol": "RBTC"
+    },
+    {
+      "name": "Cardano",
+      "tvl": 171247276.36104578,
+      "tvlPretty": "$171.25M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "cardano",
+      "tokenSymbol": "ADA"
+    },
+    {
+      "name": "dYdX",
+      "tvl": 159387379.3090856,
+      "tvlPretty": "$159.39M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "dydx-chain",
+      "tokenSymbol": "dYdX"
+    },
+    {
+      "name": "Plume Mainnet",
+      "tvl": 157077007.62669164,
+      "tvlPretty": "$157.08M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "plume",
+      "tokenSymbol": "PLUME"
+    },
+    {
+      "name": "Hydration",
+      "tvl": 141540808.5064553,
+      "tvlPretty": "$141.54M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "hydradx",
+      "tokenSymbol": "HDX"
+    },
+    {
+      "name": "Gnosis",
+      "tvl": 137319546.86407793,
+      "tvlPretty": "$137.32M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "gnosis",
+      "tokenSymbol": "GNO"
+    },
+    {
+      "name": "Unichain",
+      "tvl": 133627592.9073828,
+      "tvlPretty": "$133.63M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": null,
+      "tokenSymbol": "-"
+    },
+    {
+      "name": "Near",
+      "tvl": 132198013.72058506,
+      "tvlPretty": "$132.20M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "near",
+      "tokenSymbol": "NEAR"
+    },
+    {
+      "name": "Stacks",
+      "tvl": 115865250.85604128,
+      "tvlPretty": "$115.87M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "blockstack",
+      "tokenSymbol": "STX"
+    },
+    {
+      "name": "Mixin",
+      "tvl": 86205375.67945813,
+      "tvlPretty": "$86.21M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "mixin",
+      "tokenSymbol": "XIN"
+    }
+  ],
+  "top": [
+    {
+      "name": "Ethereum",
+      "tvl": 68410441704.524666,
+      "tvlPretty": "$68.41B",
+      "mapped": true,
+      "mappedId": "ethereum",
+      "gecko_id": "ethereum",
+      "tokenSymbol": "ETH"
+    },
+    {
+      "name": "Solana",
+      "tvl": 8446213575.212075,
+      "tvlPretty": "$8.45B",
+      "mapped": true,
+      "mappedId": "solana",
+      "gecko_id": "solana",
+      "tokenSymbol": "SOL"
+    },
+    {
+      "name": "Bitcoin",
+      "tvl": 6858809262.409542,
+      "tvlPretty": "$6.86B",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "bitcoin",
+      "tokenSymbol": "BTC"
+    },
+    {
+      "name": "BSC",
+      "tvl": 6445317328.978709,
+      "tvlPretty": "$6.45B",
+      "mapped": true,
+      "mappedId": "bnb",
+      "gecko_id": "binancecoin",
+      "tokenSymbol": "BNB"
+    },
+    {
+      "name": "Tron",
+      "tvl": 4405990643.177465,
+      "tvlPretty": "$4.41B",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "tron",
+      "tokenSymbol": "TRON"
+    },
+    {
+      "name": "Base",
+      "tvl": 4364948048.820043,
+      "tvlPretty": "$4.36B",
+      "mapped": true,
+      "mappedId": "base",
+      "gecko_id": null,
+      "tokenSymbol": null
+    },
+    {
+      "name": "Plasma",
+      "tvl": 2907895144.9582567,
+      "tvlPretty": "$2.91B",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "plasma",
+      "tokenSymbol": "XPL"
+    },
+    {
+      "name": "Arbitrum",
+      "tvl": 2840873119.289899,
+      "tvlPretty": "$2.84B",
+      "mapped": true,
+      "mappedId": "arbitrum",
+      "gecko_id": "arbitrum",
+      "tokenSymbol": "ARB"
+    },
+    {
+      "name": "Hyperliquid L1",
+      "tvl": 1442252269.7065904,
+      "tvlPretty": "$1.44B",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "hyperliquid",
+      "tokenSymbol": "HYPE"
+    },
+    {
+      "name": "Avalanche",
+      "tvl": 1251331786.7547827,
+      "tvlPretty": "$1.25B",
+      "mapped": true,
+      "mappedId": "avalanche",
+      "gecko_id": "avalanche-2",
+      "tokenSymbol": "AVAX"
+    },
+    {
+      "name": "Polygon",
+      "tvl": 1159443896.434959,
+      "tvlPretty": "$1.16B",
+      "mapped": true,
+      "mappedId": "polygon",
+      "gecko_id": "polygon-ecosystem-token",
+      "tokenSymbol": "POL"
+    },
+    {
+      "name": "Sui",
+      "tvl": 913349626.5338352,
+      "tvlPretty": "$913.35M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "sui",
+      "tokenSymbol": "SUI"
+    },
+    {
+      "name": "Ink",
+      "tvl": 476924411.96867216,
+      "tvlPretty": "$476.92M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": null,
+      "tokenSymbol": null
+    },
+    {
+      "name": "Provenance",
+      "tvl": 449671164.03010255,
+      "tvlPretty": "$449.67M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "hash-2",
+      "tokenSymbol": "HASH"
+    },
+    {
+      "name": "Aptos",
+      "tvl": 431508970.4670438,
+      "tvlPretty": "$431.51M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "aptos",
+      "tokenSymbol": "APT"
+    },
+    {
+      "name": "Vaulta",
+      "tvl": 378059430.56484747,
+      "tvlPretty": "$378.06M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "eos",
+      "tokenSymbol": "EOS"
+    },
+    {
+      "name": "Katana",
+      "tvl": 375420323.1532471,
+      "tvlPretty": "$375.42M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": null,
+      "tokenSymbol": null
+    },
+    {
+      "name": "Cronos",
+      "tvl": 369799115.63448817,
+      "tvlPretty": "$369.80M",
+      "mapped": true,
+      "mappedId": "cronos",
+      "gecko_id": "crypto-com-chain",
+      "tokenSymbol": "CRO"
+    },
+    {
+      "name": "Mantle",
+      "tvl": 333367202.75230825,
+      "tvlPretty": "$333.37M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "mantle",
+      "tokenSymbol": "MNT"
+    },
+    {
+      "name": "OP Mainnet",
+      "tvl": 290813343.7424075,
+      "tvlPretty": "$290.81M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "optimism",
+      "tokenSymbol": "OP"
+    },
+    {
+      "name": "Berachain",
+      "tvl": 245895598.64371172,
+      "tvlPretty": "$245.90M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "berachain-bera",
+      "tokenSymbol": "BERA"
+    },
+    {
+      "name": "Starknet",
+      "tvl": 235117691.64497367,
+      "tvlPretty": "$235.12M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "starknet",
+      "tokenSymbol": "STRK"
+    },
+    {
+      "name": "Monad",
+      "tvl": 233410478.40740654,
+      "tvlPretty": "$233.41M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "monad",
+      "tokenSymbol": "MON"
+    },
+    {
+      "name": "Linea",
+      "tvl": 213764532.79796916,
+      "tvlPretty": "$213.76M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "linea",
+      "tokenSymbol": "LINEA"
+    },
+    {
+      "name": "Movement",
+      "tvl": 196645036.98511606,
+      "tvlPretty": "$196.65M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "movement",
+      "tokenSymbol": "MOVE"
+    },
+    {
+      "name": "Scroll",
+      "tvl": 191168988.3387614,
+      "tvlPretty": "$191.17M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": null,
+      "tokenSymbol": null
+    },
+    {
+      "name": "Flare",
+      "tvl": 185775020.71556005,
+      "tvlPretty": "$185.78M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "flare-networks",
+      "tokenSymbol": "FLR"
+    },
+    {
+      "name": "Sei",
+      "tvl": 182015165.90047282,
+      "tvlPretty": "$182.02M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "sei-network",
+      "tokenSymbol": "SEI"
+    },
+    {
+      "name": "Stellar",
+      "tvl": 174059595.70217806,
+      "tvlPretty": "$174.06M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "stellar",
+      "tokenSymbol": "XLM"
+    },
+    {
+      "name": "Rootstock",
+      "tvl": 171930396.53769898,
+      "tvlPretty": "$171.93M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "rootstock",
+      "tokenSymbol": "RBTC"
+    },
+    {
+      "name": "Cardano",
+      "tvl": 171247276.36104578,
+      "tvlPretty": "$171.25M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "cardano",
+      "tokenSymbol": "ADA"
+    },
+    {
+      "name": "dYdX",
+      "tvl": 159387379.3090856,
+      "tvlPretty": "$159.39M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "dydx-chain",
+      "tokenSymbol": "dYdX"
+    },
+    {
+      "name": "Plume Mainnet",
+      "tvl": 157077007.62669164,
+      "tvlPretty": "$157.08M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "plume",
+      "tokenSymbol": "PLUME"
+    },
+    {
+      "name": "PulseChain",
+      "tvl": 155989223.6647559,
+      "tvlPretty": "$155.99M",
+      "mapped": true,
+      "mappedId": "pulsechain",
+      "gecko_id": "pulsechain",
+      "tokenSymbol": "PLS"
+    },
+    {
+      "name": "Hydration",
+      "tvl": 141540808.5064553,
+      "tvlPretty": "$141.54M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "hydradx",
+      "tokenSymbol": "HDX"
+    },
+    {
+      "name": "Gnosis",
+      "tvl": 137319546.86407793,
+      "tvlPretty": "$137.32M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "gnosis",
+      "tokenSymbol": "GNO"
+    },
+    {
+      "name": "Unichain",
+      "tvl": 133627592.9073828,
+      "tvlPretty": "$133.63M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": null,
+      "tokenSymbol": "-"
+    },
+    {
+      "name": "Near",
+      "tvl": 132198013.72058506,
+      "tvlPretty": "$132.20M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "near",
+      "tokenSymbol": "NEAR"
+    },
+    {
+      "name": "Stacks",
+      "tvl": 115865250.85604128,
+      "tvlPretty": "$115.87M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "blockstack",
+      "tokenSymbol": "STX"
+    },
+    {
+      "name": "Mixin",
+      "tvl": 86205375.67945813,
+      "tvlPretty": "$86.21M",
+      "mapped": false,
+      "mappedId": null,
+      "gecko_id": "mixin",
+      "tokenSymbol": "XIN"
+    }
+  ]
+}

@@ -4,19 +4,34 @@
 // Re-export WeightMode from config
 export type { WeightMode } from "@/config/dataConfig";
 import type { WeightMode } from "@/config/dataConfig";
+import type { PrimaryProvider } from "@/types/providers";
 
 // ===== Token Data =====
 export type TokenData = {
     symbol: string;           // "UNI", "AAVE", etc.
     name: string;             // Full name
-    address: string;          // Contract address
+    // Historically this project used `address` as a stable token identifier (often the CoinGecko ID).
+    // For on-chain addresses, prefer `contractAddress`.
+    address: string;
+    geckoId?: string;         // CoinGecko ID when available (e.g. "aave")
+    contractAddress?: string; // Contract address / mint address when known (preferred for search + DexScreener)
+    platformAddresses?: Record<string, string>; // CoinGecko platforms mapping (platformKey -> address)
     price: number;            // Current price in USD
     change24h: number;        // 24h price change percentage
     volume24h: number;        // 24h trading volume in USD
     liquidity: number;        // Total liquidity in USD
-    marketCap: number;        // Market capitalization in USD
+    marketCap: number;        // Market cap-like value used for sizing/display (may be FDV fallback)
+    fdv?: number;             // Fully diluted valuation (if available)
+    marketCapKind?: "market_cap" | "fdv" | "estimated" | "unknown"; // What `marketCap` represents
     color: string;            // Visual color (hex or CSS)
     icon?: string;            // Icon URL from CoinGecko
+
+    // Optional DexScreener metadata (when token metrics were enriched from DexScreener)
+    dexScreenerUrl?: string;  // Deep link to the DexScreener page we derived metrics from
+    dexPairAddress?: string;  // Pair/pool address when known
+    dexScreenerDexId?: string; // e.g. "raydium", "uniswap"
+    dexScreenerBaseSymbol?: string; // Pair base token symbol
+    dexScreenerQuoteSymbol?: string; // Pair quote token symbol
 };
 
 // ===== Chain/Blockchain Data =====
@@ -26,10 +41,15 @@ export type ChainData = {
     name: string;             // "Ethereum", "Solana", etc.
     weight: number;           // Calculated based on current WeightMode
     tvl: number;              // Total Value Locked in USD
+    tvlKind?: "defillama" | "unknown";
     marketCap?: number;       // Native token market cap in USD (from CoinGecko)
+    fdv?: number;             // Native token fully diluted valuation in USD (from CoinGecko)
+    marketCapKind?: "market_cap" | "fdv" | "unknown";
     price?: number;           // Native token price (if applicable)
     change24h: number;        // 24h TVL or price change %
+    change24hKind?: "price" | "unknown";
     volume24h: number;        // 24h volume in USD
+    volume24hKind?: "dex" | "asset" | "unknown";
     dominance: number;        // % of total crypto market
     color: string;            // Visual theme color
     tokens: TokenData[];      // Top tokens on this chain
@@ -44,6 +64,7 @@ export type BTCData = {
     dominance: number;        // BTC dominance % of total market
     marketCap: number;        // BTC market cap in USD
     volume24h: number;        // 24h trading volume
+    volume24hKind?: "asset" | "dex_total";
     icon?: string;            // Icon URL from CoinGecko
 };
 
@@ -54,6 +75,14 @@ export type GalaxyData = {
     lastUpdated: Date;        // Timestamp of last data fetch
     totalMarketCap: number;   // Total crypto market cap
     metric: WeightMode;       // Current weight mode
+
+    // Optional API metadata (used for provider gating/diagnostics)
+    meta?: {
+        primaryProviderRequested?: PrimaryProvider;
+        primaryProviderUsed?: PrimaryProvider;
+        lockedPrimaryProvider?: PrimaryProvider;
+        lockReason?: string;
+    };
 };
 
 // ===== Physics Simulation Node =====

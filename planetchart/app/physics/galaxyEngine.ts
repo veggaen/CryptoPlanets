@@ -21,6 +21,25 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
 
     const nodes: GalaxyNode[] = [];
 
+    const tokenWeightForMetric = (token: any): number => {
+        if (data.metric === 'TVL') return typeof token?.liquidity === 'number' ? token.liquidity : 0;
+        if (data.metric === 'Volume24h') return typeof token?.volume24h === 'number' ? token.volume24h : 0;
+        return typeof token?.marketCap === 'number' ? token.marketCap : 0;
+    };
+
+    const tokenWeights: number[] = [];
+    for (const chain of data.chains) {
+        for (const token of chain.tokens) {
+            const w = tokenWeightForMetric(token);
+            if (typeof w === 'number' && Number.isFinite(w) && w > 0) {
+                tokenWeights.push(w);
+            }
+        }
+    }
+
+    const globalTokenMax = tokenWeights.length ? Math.max(...tokenWeights) : 0;
+    const globalTokenMin = tokenWeights.length ? Math.min(...tokenWeights) : 0;
+
     // 1. Calculate BTC weight to compare with chains
     const btcWeight = calculateBTCWeight(data.btc, data.metric);
 
@@ -108,8 +127,12 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
             const chain = body.data as ChainData;
             const planetRadius = node.radius;
 
-            // Sort tokens by marketCap for hierarchy (biggest = most important)
-            const sortedTokens = [...chain.tokens].sort((a, b) => (b.marketCap || 0) - (a.marketCap || 0));
+            // Sort tokens by active metric for hierarchy (biggest = most important)
+            const sortedTokens = [...chain.tokens].sort((a, b) => {
+                const bw = tokenWeightForMetric(b);
+                const aw = tokenWeightForMetric(a);
+                return (bw - aw) || ((b.marketCap || 0) - (a.marketCap || 0));
+            });
 
             // Split into Moons (Top N) and Meteorites (Rest)
             const moonCount = Math.min(sortedTokens.length, physicsConfig.maxMoonsPerPlanet);
@@ -143,27 +166,19 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
                 const moonX = x + Math.cos(moonAngle) * moonOrbitRadius;
                 const moonY = y + Math.sin(moonAngle) * moonOrbitRadius;
 
-                // ===== GLOBAL LOG SCALE for DRAMATIC size differentiation =====
-                // Use GLOBAL market cap range across ALL tokens, not just this chain
-                // This ensures a $10B token on ETH is the same size as a $10B token on SOL
-                // 
-                // Global scale anchors:
-                // - MAX: $30B (top memecoins like SHIB, PEPE at peak)
-                // - MIN: $1M (micro cap threshold)
-                // This gives log range: log10(30B) - log10(1M) = 10.5 - 6 = 4.5
-                const GLOBAL_MAX_CAP = 30_000_000_000; // $30B
-                const GLOBAL_MIN_CAP = 1_000_000;       // $1M
-                
-                const tokenCap = Math.max(token.marketCap || 1, GLOBAL_MIN_CAP);
-                const cappedTokenCap = Math.min(tokenCap, GLOBAL_MAX_CAP);
-                
-                // Log scale: normalize between 0 and 1 using GLOBAL range
-                const logMax = Math.log10(GLOBAL_MAX_CAP);
-                const logMin = Math.log10(GLOBAL_MIN_CAP);
-                const logToken = Math.log10(cappedTokenCap);
-                
-                // Normalized 0-1 based on GLOBAL log scale
-                const logRange = logMax - logMin; // ~4.5
+                // ===== GLOBAL LOG SCALE based on ACTIVE METRIC =====
+                // Use a consistent global range across all tokens in this response.
+                const tokenWeight = tokenWeightForMetric(token);
+                const resolvedMax = globalTokenMax > 0 ? globalTokenMax : Math.max(tokenWeight, 1);
+                const resolvedMin = globalTokenMin > 0 ? globalTokenMin : Math.max(resolvedMax * 1e-6, 1);
+
+                const safeWeight = tokenWeight > 0 ? tokenWeight : resolvedMin;
+                const clampedWeight = clamp(safeWeight, resolvedMin, resolvedMax);
+
+                const logMax = Math.log10(resolvedMax);
+                const logMin = Math.log10(resolvedMin);
+                const logToken = Math.log10(clampedWeight);
+                const logRange = Math.max(1e-6, logMax - logMin);
                 const normalizedLog = Math.max(0, Math.min(1, (logToken - logMin) / logRange));
                 
                 // Map to radius range with FULL range utilization
@@ -176,16 +191,15 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
                 radius = Math.max(physicsConfig.moonMinRadius, Math.min(physicsConfig.moonMaxRadius, radius));
                 
                 // Hard cap: moon can never exceed 20% of planet radius
-                const maxMoonRelative = 0.20;
+                const maxMoonRelative = data.metric === 'TVL' ? 0.30 : 0.20;
                 if (radius > planetRadius * maxMoonRelative) {
                     radius = planetRadius * maxMoonRelative;
                 }
 
                 const moonId = `${chain.id}-${token.symbol}-${tIndex}`;
                 
-                // Calculate mass based on market cap (for bowling ball physics)
-                // Higher market cap = more mass = harder to move in collision
-                const moonMass = 5 + (normalizedLog * 45); // Range: 5-50 based on market cap
+                // Heavier metric weight = more mass = harder to move in collision
+                const moonMass = 5 + (normalizedLog * 45);
                 
                 // Calculate angular velocity for orbit
                 const angularVel = physicsConfig.baseTokenAngularVel * (0.8 + Math.random() * 0.4) * (Math.random() > 0.5 ? 1 : -1);
@@ -214,7 +228,7 @@ export function initGalaxyState(data: GalaxyData): GalaxyState {
                     slotIndex,
                     slotCount,
                     slotSpan: angleStep,
-                    weight: token.marketCap,
+                    weight: tokenWeight,
                     mass: moonMass, // Mass based on market cap for bowling ball physics!
                     orbitEccentricity: eccentricity, // Store for elliptical orbit
                     data: token as any,

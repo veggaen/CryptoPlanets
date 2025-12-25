@@ -3,6 +3,140 @@ import { BTCData, TokenData } from "@/types/galaxy";
 import { debugLog } from "@/utils/debug";
 import { validateBTCData } from "@/utils/validation";
 
+type CoinGeckoCoinListRow = {
+    id: string;
+    platforms?: Record<string, string | null | undefined>;
+};
+
+const COIN_PLATFORMS_CACHE_VERSION = 1;
+const COIN_PLATFORMS_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+let coinPlatformsCache: {
+    version: number;
+    timestamp: number;
+    platformsById: Map<string, Record<string, string>>;
+} | null = null;
+
+async function fetchPlatformsForCoinIds(coinIds: string[], headers: HeadersInit): Promise<Map<string, Record<string, string>>> {
+    const now = Date.now();
+
+    if (!coinPlatformsCache || coinPlatformsCache.version !== COIN_PLATFORMS_CACHE_VERSION) {
+        coinPlatformsCache = {
+            version: COIN_PLATFORMS_CACHE_VERSION,
+            timestamp: now,
+            platformsById: new Map(),
+        };
+    }
+
+    const targetIds = [...new Set(coinIds)].filter(Boolean);
+    const missing = targetIds.filter((id) => !coinPlatformsCache!.platformsById.has(id));
+    if (missing.length === 0) return coinPlatformsCache.platformsById;
+
+    // CoinGecko rate-limits; keep concurrency low.
+    const concurrency = 3;
+    let nextIndex = 0;
+
+    async function worker(): Promise<void> {
+        while (true) {
+            const idx = nextIndex++;
+            if (idx >= missing.length) return;
+
+            const id = missing[idx];
+            try {
+                const url = `${dataConfig.coinGecko.baseURL}/coins/${encodeURIComponent(id)}?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false`;
+                const res = await fetch(url, { headers });
+                if (!res.ok) continue;
+
+                const raw = await res.json() as { platforms?: Record<string, unknown> };
+                const platforms = raw?.platforms;
+                if (!platforms || typeof platforms !== 'object') continue;
+
+                const cleaned: Record<string, string> = {};
+                for (const [key, value] of Object.entries(platforms)) {
+                    if (typeof value === 'string') {
+                        const trimmed = value.trim();
+                        if (trimmed.length > 0) cleaned[key] = trimmed;
+                    }
+                }
+
+                if (Object.keys(cleaned).length > 0) {
+                    coinPlatformsCache!.platformsById.set(id, cleaned);
+                }
+            } catch {
+                // Best-effort enrichment; ignore per-coin failures.
+            }
+        }
+    }
+
+    await Promise.all(Array.from({ length: Math.min(concurrency, missing.length) }, () => worker()));
+    coinPlatformsCache.timestamp = now;
+    return coinPlatformsCache.platformsById;
+}
+
+async function getCoinPlatformsById(): Promise<Map<string, Record<string, string>>> {
+    const now = Date.now();
+
+    if (
+        coinPlatformsCache
+        && coinPlatformsCache.version === COIN_PLATFORMS_CACHE_VERSION
+        && (now - coinPlatformsCache.timestamp) < COIN_PLATFORMS_TTL_MS
+    ) {
+        return coinPlatformsCache.platformsById;
+    }
+
+    // Without an API key, CoinGecko rate-limits aggressively and this endpoint is large.
+    // Skipping this call prevents the entire token list from collapsing to 0 ("missing moons").
+    const apiKey = process.env.COINGECKO_API_KEY;
+    if (!apiKey) {
+        return coinPlatformsCache?.platformsById ?? new Map();
+    }
+
+    try {
+        const url = `${dataConfig.coinGecko.baseURL}/coins/list?include_platform=true`;
+        debugLog('data', 'Fetching CoinGecko platforms list (include_platform=true)');
+
+        const headers: HeadersInit = { 'x-cg-demo-api-key': apiKey };
+
+        const response = await fetch(url, { headers });
+        if (!response.ok) {
+            debugLog('data', `CoinGecko API error for coins/list include_platform: ${response.status} ${response.statusText}`);
+            return coinPlatformsCache?.platformsById ?? new Map();
+        }
+
+        const raw = await response.json() as CoinGeckoCoinListRow[];
+        const platformsById = new Map<string, Record<string, string>>();
+
+        for (const row of raw) {
+            if (!row || typeof row.id !== 'string') continue;
+            const platforms = row.platforms;
+            if (!platforms || typeof platforms !== 'object') continue;
+
+            const cleaned: Record<string, string> = {};
+            for (const [key, value] of Object.entries(platforms)) {
+                if (typeof value === 'string') {
+                    const trimmed = value.trim();
+                    if (trimmed.length > 0) cleaned[key] = trimmed;
+                }
+            }
+            if (Object.keys(cleaned).length > 0) {
+                platformsById.set(row.id, cleaned);
+            }
+        }
+
+        coinPlatformsCache = {
+            version: COIN_PLATFORMS_CACHE_VERSION,
+            timestamp: now,
+            platformsById,
+        };
+
+        debugLog('data', `OK: Loaded platform mappings for ${platformsById.size} coins`);
+        return platformsById;
+    } catch (error) {
+        debugLog('data', `Error fetching CoinGecko platforms list: ${error}`);
+        return coinPlatformsCache?.platformsById ?? new Map();
+    }
+}
+
 // ===== MOCK FLAG =====
 // Use mock data in tests or when explicitly enabled
 // FORCE FALSE for production/dev to ensure real data is attempted
@@ -17,10 +151,12 @@ interface CacheEntry<T> {
 }
 
 let btcCache: CacheEntry<BTCData> | null = null;
+let globalCache: CacheEntry<{ totalMarketCapUsd: number; btcDominance: number }> | null = null;
 const ecosystemTokensCache: Record<string, CacheEntry<TokenData[]>> = {};
 
 // ===== RATE LIMIT TRACKING =====
 let btcRateLimitHit: number = 0;
+let globalRateLimitHit: number = 0;
 const ecosystemRateLimitHit: Record<string, number> = {};
 
 // ===== TYPE DEFINITIONS =====
@@ -31,10 +167,70 @@ export type RawCoinGeckoEcosystemToken = {
     current_price: number;
     market_cap: number;
     fully_diluted_valuation?: number | null;
+    circulating_supply?: number | null;
     price_change_percentage_24h: number | null;
     total_volume: number;
     image?: string;
 };
+
+type RawCoinGeckoGlobal = {
+    data?: {
+        total_market_cap?: { usd?: number };
+        market_cap_percentage?: { btc?: number };
+    };
+};
+
+/**
+ * Fetch global market stats from CoinGecko (total market cap + BTC dominance)
+ * Used to align BTC dominance with BTC.D sources.
+ */
+export async function fetchGlobalMarketStats(): Promise<{ totalMarketCapUsd: number; btcDominance: number } | null> {
+    const now = Date.now();
+
+    if (USE_MOCK_COINGECKO) {
+        // Keep deterministic-ish values for tests.
+        return { totalMarketCapUsd: 3_500_000_000_000, btcDominance: 58.5 };
+    }
+
+    const cooldownRemaining = dataConfig.cache.rateLimitCooldown - (now - globalRateLimitHit);
+    if (globalRateLimitHit > 0 && cooldownRemaining > 0) {
+        if (globalCache) return globalCache.data;
+        return null;
+    }
+
+    if (globalCache && (now - globalCache.lastFetched < dataConfig.cache.ttl.btc)) {
+        return globalCache.data;
+    }
+
+    try {
+        const url = `${dataConfig.coinGecko.baseURL}/global`;
+        const apiKey = process.env.COINGECKO_API_KEY;
+        const headers: HeadersInit = apiKey ? { 'x-cg-demo-api-key': apiKey } : {};
+
+        const response = await fetch(url, { headers });
+        if (!response.ok) {
+            if (response.status === 429) {
+                globalRateLimitHit = now;
+            }
+            return globalCache ? globalCache.data : null;
+        }
+
+        const raw = await response.json() as RawCoinGeckoGlobal;
+        const totalMarketCapUsd = raw.data?.total_market_cap?.usd;
+        const btcDominance = raw.data?.market_cap_percentage?.btc;
+
+        if (typeof totalMarketCapUsd !== 'number' || typeof btcDominance !== 'number') {
+            return globalCache ? globalCache.data : null;
+        }
+
+        const parsed = { totalMarketCapUsd, btcDominance };
+        globalCache = { data: parsed, lastFetched: now };
+        return parsed;
+    } catch (error) {
+        debugLog('data', `Error fetching CoinGecko global stats: ${error}`);
+        return globalCache ? globalCache.data : null;
+    }
+}
 
 // ===== HELPER FUNCTIONS =====
 
@@ -233,19 +429,34 @@ export async function fetchEcosystemTokensFromCoinGecko(
 
         const rawData: RawCoinGeckoEcosystemToken[] = await response.json();
 
+        const platformsById = await getCoinPlatformsById();
+
         // Map to our TokenData format
-        // Use fully_diluted_valuation as fallback for market_cap
         const tokens: TokenData[] = rawData.map(token => {
-            const marketCap = token.market_cap || token.fully_diluted_valuation || 0;
+            const fdv = typeof token.fully_diluted_valuation === 'number' ? token.fully_diluted_valuation : undefined;
+            const hasMarketCap = typeof token.market_cap === 'number' && token.market_cap > 0;
+            const circulatingSupply = typeof token.circulating_supply === 'number' ? token.circulating_supply : undefined;
+            const canEstimateCap = !hasMarketCap && !fdv && typeof token.current_price === 'number' && token.current_price > 0 && typeof circulatingSupply === 'number' && circulatingSupply > 0;
+            const estimatedMarketCap = canEstimateCap ? token.current_price * circulatingSupply : 0;
+            const marketCap = hasMarketCap ? token.market_cap : (fdv ?? estimatedMarketCap);
+            const marketCapKind: TokenData["marketCapKind"] = hasMarketCap
+                ? 'market_cap'
+                : (fdv ? 'fdv' : (canEstimateCap ? 'estimated' : 'unknown'));
+
+            const platformAddresses = platformsById.get(token.id);
             return {
                 symbol: token.symbol.toUpperCase(),
                 name: token.name,
-                address: token.id, // Use CoinGecko ID as address
+                address: token.id, // Stable identifier for this app
+                geckoId: token.id,
+                platformAddresses,
                 price: token.current_price || 0,
                 change24h: token.price_change_percentage_24h || 0,
                 volume24h: token.total_volume || 0,
                 liquidity: 0, // CoinGecko doesn't provide liquidity in this endpoint
                 marketCap,
+                fdv,
+                marketCapKind,
                 color: getTokenColor(token.price_change_percentage_24h || 0),
                 icon: token.image, // Include icon URL from CoinGecko
             };
@@ -279,8 +490,6 @@ export async function fetchEcosystemTokensFromCoinGecko(
 export async function fetchCoinsPrices(coinIds: string[]): Promise<Record<string, number>> {
     if (coinIds.length === 0) return {};
 
-    const now = Date.now();
-
     // Return mock data if flag is set
     if (USE_MOCK_COINGECKO) {
         debugLog('data', `Using MOCK prices for coins: ${coinIds.join(', ')}`);
@@ -312,12 +521,12 @@ export async function fetchCoinsPrices(coinIds: string[]): Promise<Record<string
             return {};
         }
 
-        const rawData = await response.json();
+        const rawData = await response.json() as Record<string, { usd?: number }>;
 
         // Transform to our format: { "ethereum": 2500, "solana": 100, ... }
         const prices: Record<string, number> = {};
-        Object.entries(rawData).forEach(([coinId, data]: [string, any]) => {
-            if (data && data.usd) {
+        Object.entries(rawData).forEach(([coinId, data]) => {
+            if (typeof data?.usd === 'number') {
                 prices[coinId] = data.usd;
             }
         });
@@ -381,6 +590,80 @@ export async function fetchCoinMarketCaps(coinIds: string[]): Promise<Record<str
     }
 }
 
+export type CoinMarketSnapshot = {
+    id: string;
+    marketCap?: number;
+    fdv?: number;
+    price?: number;
+    volume24h?: number;
+    change24h?: number;
+    circulatingSupply?: number;
+    totalSupply?: number;
+};
+
+/**
+ * Fetch market snapshot for multiple coins by CoinGecko IDs.
+ * Uses /coins/markets to access fully_diluted_valuation + supply fields.
+ */
+export async function fetchCoinMarketSnapshots(coinIds: string[]): Promise<Record<string, CoinMarketSnapshot>> {
+    if (coinIds.length === 0) return {};
+
+    if (USE_MOCK_COINGECKO) {
+        const out: Record<string, CoinMarketSnapshot> = {};
+        coinIds.forEach(id => {
+            out[id] = {
+                id,
+                marketCap: Math.random() * 500000000000 + 1000000000,
+                fdv: Math.random() * 700000000000 + 1000000000,
+                price: Math.random() * 2000 + 1,
+                volume24h: Math.random() * 20000000000,
+                change24h: (Math.random() * 40) - 20,
+                circulatingSupply: Math.random() * 1e9,
+                totalSupply: Math.random() * 2e9,
+            };
+        });
+        return out;
+    }
+
+    try {
+        const ids = coinIds.join(',');
+        const url = `${dataConfig.coinGecko.baseURL}${dataConfig.coinGecko.endpoints.markets}?vs_currency=usd&ids=${encodeURIComponent(ids)}&order=market_cap_desc&per_page=${coinIds.length}&page=1&sparkline=false`;
+        debugLog('data', `Fetching coin snapshots for: ${ids}`);
+
+        const apiKey = process.env.COINGECKO_API_KEY;
+        const headers: HeadersInit = apiKey ? { 'x-cg-demo-api-key': apiKey } : {};
+        const response = await fetch(url, { headers });
+        if (!response.ok) {
+            debugLog('data', `CoinGecko API error for snapshots: ${response.status} ${response.statusText}`);
+            return {};
+        }
+
+        const rawData = await response.json() as Array<Record<string, unknown>>;
+        const out: Record<string, CoinMarketSnapshot> = {};
+
+        for (const row of rawData) {
+            const id = typeof row.id === 'string' ? row.id : null;
+            if (!id) continue;
+
+            out[id] = {
+                id,
+                marketCap: typeof row.market_cap === 'number' ? row.market_cap : undefined,
+                fdv: typeof row.fully_diluted_valuation === 'number' ? row.fully_diluted_valuation : undefined,
+                price: typeof row.current_price === 'number' ? row.current_price : undefined,
+                volume24h: typeof row.total_volume === 'number' ? row.total_volume : undefined,
+                change24h: typeof row.price_change_percentage_24h === 'number' ? row.price_change_percentage_24h : undefined,
+                circulatingSupply: typeof row.circulating_supply === 'number' ? row.circulating_supply : undefined,
+                totalSupply: typeof row.total_supply === 'number' ? row.total_supply : undefined,
+            };
+        }
+
+        return out;
+    } catch (error) {
+        debugLog('data', `Error fetching coin snapshots: ${error}`);
+        return {};
+    }
+}
+
 /**
  * Fetch specific tokens by their CoinGecko IDs
  * Used for priority tokens (moons)
@@ -388,12 +671,10 @@ export async function fetchCoinMarketCaps(coinIds: string[]): Promise<Record<str
 export async function fetchSpecificTokens(tokenIds: string[]): Promise<TokenData[]> {
     if (tokenIds.length === 0) return [];
 
-    const now = Date.now();
-
     // Return mock data if flag is set
     if (USE_MOCK_COINGECKO) {
         debugLog('data', `Using MOCK specific tokens for: ${tokenIds.join(', ')}`);
-        return tokenIds.map((id, i) => ({
+        return tokenIds.map((id) => ({
             symbol: id.substring(0, 3).toUpperCase(),
             name: id,
             address: id,
@@ -433,25 +714,46 @@ export async function fetchSpecificTokens(tokenIds: string[]): Promise<TokenData
 
         const rawData: RawCoinGeckoEcosystemToken[] = await response.json();
 
+        // Optional enrichment: map CoinGecko IDs -> platform contract addresses.
+        // - With an API key, use the large cached mapping endpoint.
+        // - Without an API key, fall back to per-coin lookups for just these tokens (best effort).
+        let platformsById = await getCoinPlatformsById();
+        if (!apiKey) {
+            platformsById = await fetchPlatformsForCoinIds(tokenIds, headers);
+        }
+
         // Map to our TokenData format
-        // Use fully_diluted_valuation as fallback for market_cap (e.g., HEX has market_cap:0 but FDV:68M)
         const tokens: TokenData[] = rawData.map(token => {
-            const marketCap = token.market_cap || token.fully_diluted_valuation || 0;
+            const fdv = typeof token.fully_diluted_valuation === 'number' ? token.fully_diluted_valuation : undefined;
+            const hasMarketCap = typeof token.market_cap === 'number' && token.market_cap > 0;
+            const circulatingSupply = typeof token.circulating_supply === 'number' ? token.circulating_supply : undefined;
+            const canEstimateCap = !hasMarketCap && !fdv && typeof token.current_price === 'number' && token.current_price > 0 && typeof circulatingSupply === 'number' && circulatingSupply > 0;
+            const estimatedMarketCap = canEstimateCap ? token.current_price * circulatingSupply : 0;
+            const marketCap = hasMarketCap ? token.market_cap : (fdv ?? estimatedMarketCap);
+            const marketCapKind: TokenData["marketCapKind"] = hasMarketCap
+                ? 'market_cap'
+                : (fdv ? 'fdv' : (canEstimateCap ? 'estimated' : 'unknown'));
+
+            const platformAddresses = platformsById.get(token.id);
             return {
                 symbol: token.symbol.toUpperCase(),
                 name: token.name,
-                address: token.id, // Use CoinGecko ID as address
+                address: token.id, // Stable identifier for this app
+                geckoId: token.id,
+                platformAddresses,
                 price: token.current_price || 0,
                 change24h: token.price_change_percentage_24h || 0,
                 volume24h: token.total_volume || 0,
                 liquidity: 0,
                 marketCap,
+                fdv,
+                marketCapKind,
                 color: getTokenColor(token.price_change_percentage_24h || 0),
                 icon: token.image, // Include icon URL from CoinGecko
             };
         });
 
-        debugLog('data', `OK: Fetched ${tokens.length} specific priority tokens (using FDV fallback for market_cap=0)`);
+        debugLog('data', `OK: Fetched ${tokens.length} specific priority tokens`);
         return tokens;
 
     } catch (error) {

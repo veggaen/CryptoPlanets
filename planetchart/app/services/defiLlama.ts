@@ -7,6 +7,90 @@ import { validateDefiLlamaChains } from "@/utils/validation";
 let chainsCache: DefiLlamaChain[] | null = null;
 let lastFetchTime = 0;
 
+type CachedNumber = { value: number | null; timestamp: number };
+const dexTotalCache: CachedNumber = { value: null, timestamp: 0 };
+const dexChainCache: Map<string, CachedNumber> = new Map();
+
+function isFresh(timestamp: number, ttlMs: number): boolean {
+    return Date.now() - timestamp < ttlMs;
+}
+
+type DexOverviewResponse = {
+    total24h?: number;
+};
+
+type DexChainResponse = {
+    total24h?: number;
+};
+
+export async function fetchDexTotal24h(): Promise<number | null> {
+    try {
+        const ttl = dataConfig.cache.ttl.chains;
+        if (dexTotalCache.timestamp > 0 && isFresh(dexTotalCache.timestamp, ttl)) {
+            return dexTotalCache.value;
+        }
+
+        const url = `${dataConfig.defiLlama.baseURL}/overview/dexs?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true&dataType=dailyVolume`;
+        const response = await fetch(url);
+        if (!response.ok) return null;
+        const raw = await response.json() as DexOverviewResponse;
+        const value = typeof raw.total24h === 'number' && raw.total24h >= 0 ? raw.total24h : null;
+        dexTotalCache.value = value;
+        dexTotalCache.timestamp = Date.now();
+        return value;
+    } catch {
+        return null;
+    }
+}
+
+export async function fetchDexChainVolume24h(chainName: string): Promise<number | null> {
+    try {
+        const ttl = dataConfig.cache.ttl.chains;
+        const cached = dexChainCache.get(chainName);
+        if (cached && isFresh(cached.timestamp, ttl)) {
+            return cached.value;
+        }
+
+        const candidates = getDexChainCandidates(chainName);
+        for (const candidate of candidates) {
+            const encoded = encodeURIComponent(candidate);
+            const url = `${dataConfig.defiLlama.baseURL}/overview/dexs/${encoded}?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true&dataType=dailyVolume`;
+            const response = await fetch(url);
+            if (!response.ok) continue;
+            const raw = await response.json() as DexChainResponse;
+            const value = typeof raw.total24h === 'number' && raw.total24h >= 0 ? raw.total24h : null;
+            // Cache using the original input name so callers don't need to normalize.
+            dexChainCache.set(chainName, { value, timestamp: Date.now() });
+            return value;
+        }
+
+        dexChainCache.set(chainName, { value: null, timestamp: Date.now() });
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+function getDexChainCandidates(chainName: string): string[] {
+    // DefiLlama endpoints sometimes use short names (e.g. "BSC") while chains/tvl can return "BNB Chain".
+    const trimmed = chainName.trim();
+    const candidates: string[] = [trimmed];
+
+    const aliases: Record<string, string[]> = {
+        'BNB Chain': ['BSC'],
+        'BSC': ['BNB Chain'],
+        'Binance Smart Chain': ['BSC', 'BNB Chain'],
+        'PulseChain': ['Pulsechain'],
+        'Pulsechain': ['PulseChain'],
+    };
+
+    const extra = aliases[trimmed];
+    if (extra) candidates.push(...extra);
+
+    // De-dupe while preserving order.
+    return [...new Set(candidates)];
+}
+
 export async function fetchChainsTVL(): Promise<ChainData[]> {
     const now = Date.now();
 
@@ -62,8 +146,10 @@ function transformChains(chains: DefiLlamaChain[]): ChainData[] {
                 name: c.name,
                 weight: c.tvl, // Default weight, re-calculated later
                 tvl: c.tvl,
-                change24h: 0, // DefiLlama chains endpoint doesn't give 24h change, need another endpoint or calc
-                volume24h: 0, // Placeholder
+                tvlKind: 'defillama',
+                change24h: 0, // Filled from CoinGecko snapshots (native token) in API route
+                change24hKind: 'unknown',
+                volume24h: 0, // Filled from DefiLlama DEX volume endpoint in API route (Volume24h mode)
                 dominance: 0, // Calculated later
                 color: "from-gray-500 to-gray-700", // Default color, overridden by visualConfig
                 tokens: [],

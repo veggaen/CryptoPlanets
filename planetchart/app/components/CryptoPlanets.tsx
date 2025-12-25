@@ -6,20 +6,26 @@ import {
   GalaxyState,
   GalaxyNode,
   WeightMode,
-  GalaxyData
+  GalaxyData,
+  TokenData,
+  ChainData,
+  BTCData,
 } from "@/types/galaxy";
-import { loadGalaxyData } from "@/services/dataLoader";
+import { loadGalaxyData, type VolumeSource } from "@/services/dataLoader";
 import { initGalaxyState, tickGalaxy } from "@/physics/galaxyEngine";
 import { CAMERA_CONFIG, updateFollowCamera, calculateIdealZoom, createCinematicTransition, updateCinematicTransition, CameraTransition } from "@/physics/cameraEngine";
 import { getParticles, getShakeOffset, Particle, setParticleBudget, collisionConfig } from "@/physics/collision";
 import { uiConfig } from "@/config/uiConfig";
 import type { QualityMode } from "@/types/performance";
+import type { PrimaryProvider } from "@/types/providers";
+import { normalizePrimaryProvider } from "@/types/providers";
 import { formatCompactUSD, formatPercentChange } from "@/utils/formatters";
 import Starfield from "./Starfield";
 import Footer from "./Footer";
 import GalaxyHUD from "./GalaxyHUD";
 import RadialMenu from "./RadialMenu";
 import MobileHUD from "./MobileHUD";
+import DeckGalaxyPrototype from "./DeckGalaxyPrototype";
 
 const QUALITY_BUDGETS = {
   lite: {
@@ -37,7 +43,7 @@ const VIEW_CULL_PADDING_PX = 220;
 const METRIC_LABELS: Record<WeightMode, string> = {
   MarketCap: "MCap",
   TVL: "TVL",
-  Volume24h: "24h Vol",
+  Volume24h: "24H Vol",
   Change24h: "24h Δ",
   Change7d: "7d Δ",
   Change30d: "30d Δ",
@@ -102,22 +108,42 @@ function resolveMetricValue(node: GalaxyNode, mode: WeightMode): number | null {
 
   switch (mode) {
     case "MarketCap": {
-      return asNumber(data.marketCap) ?? asNumber(node.weight) ?? null;
+      const cap = asNumber(data.marketCap);
+      return cap !== null && cap > 0 ? cap : null;
     }
     case "TVL": {
+      const tvlKind = typeof data.tvlKind === "string" ? data.tvlKind : null;
       const tvl = asNumber(data.tvl);
       const liquidity = asNumber(data.liquidity);
       const marketCap = asNumber(data.marketCap);
-      if (node.type === "planet" && tvl !== null) return tvl;
-      if (node.type === "moon" && liquidity !== null) return liquidity;
-      if (node.type === "sun" && marketCap !== null) return marketCap;
-      return tvl ?? liquidity ?? marketCap ?? null;
+
+      if (node.type === "planet") {
+        if (tvlKind === "unknown") return null;
+        return tvl !== null && tvl > 0 ? tvl : null;
+      }
+      if (node.type === "moon") {
+        return liquidity !== null && liquidity > 0 ? liquidity : null;
+      }
+      if (node.type === "sun") {
+        return marketCap !== null && marketCap > 0 ? marketCap : null;
+      }
+
+      if (tvl !== null && tvl > 0) return tvl;
+      if (liquidity !== null && liquidity > 0) return liquidity;
+      if (marketCap !== null && marketCap > 0) return marketCap;
+      return null;
     }
     case "Volume24h": {
-      return asNumber(data.volume24h);
+      const kind = typeof data.volume24hKind === 'string' ? data.volume24hKind : null;
+      if (kind === 'unknown') return null;
+      const vol = asNumber(data.volume24h);
+      return vol !== null && vol > 0 ? vol : null;
     }
     case "Change24h": {
-      return asNumber(data.change24h);
+      const kind = typeof data.change24hKind === "string" ? data.change24hKind : null;
+      const change = asNumber(data.change24h);
+      if (node.type === "planet" && kind === "unknown") return null;
+      return change;
     }
     case "Change7d": {
       return asNumber(data.change7d);
@@ -134,6 +160,27 @@ function getNodeMetricDisplay(node: GalaxyNode, mode: WeightMode): NodeMetricDis
   const rawValue = resolveMetricValue(node, mode);
   if (rawValue === null) {
     return null;
+  }
+
+  if (mode === "MarketCap") {
+    const data = node.data as Record<string, unknown>;
+    const kind = typeof data.marketCapKind === "string" ? data.marketCapKind : null;
+    const label = kind === "fdv" ? "FDV" : kind === "estimated" ? "Est" : METRIC_LABELS[mode];
+    return {
+      label,
+      text: formatCompactUSD(Math.abs(rawValue)),
+      accent: NEUTRAL_ACCENT,
+      trend: "neutral",
+    };
+  }
+
+  if (mode === "Volume24h") {
+    return {
+      label: "",
+      text: formatCompactUSD(Math.abs(rawValue)),
+      accent: NEUTRAL_ACCENT,
+      trend: "neutral",
+    };
   }
 
   if (mode.startsWith("Change")) {
@@ -156,7 +203,401 @@ function getNodeMetricDisplay(node: GalaxyNode, mode: WeightMode): NodeMetricDis
 }
 
 function formatMetricLine(display: NodeMetricDisplay): string {
+  if (!display.label) return display.text;
   return display.label === "MCap" ? display.text : `${display.label}: ${display.text}`;
+}
+
+type SearchSuggestion = {
+  id: string;
+  kind: "sun" | "planet" | "moon";
+  primary: string;
+  secondary: string | null;
+  address: string | null;
+  terms: string[];
+  chainId: string | null;
+  chainSymbol: string | null;
+  liquidityUsd: number | null;
+  volume24hUsd: number | null;
+  change24hPct: number | null;
+};
+
+function normalizeSearchQuery(value: string): string {
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, " ");
+}
+
+function normalizeSearchToken(value: string): string {
+  return value.toLowerCase().trim();
+}
+
+function looksLikeHexAddress(value: string): boolean {
+  return /^0x[a-f0-9]{6,}$/i.test(value.trim());
+}
+
+function looksLikeEvmAddress(value: string): boolean {
+  return /^0x[a-fA-F0-9]{40}$/.test(value.trim());
+}
+
+function looksLikeBase58Address(value: string): boolean {
+  const v = value.trim();
+  // Common Solana mint/pubkey format (base58, typically 32-44 chars)
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(v);
+}
+
+function looksLikeAnyAddress(value: string): boolean {
+  const v = value.trim();
+  if (v.length < 10) return false;
+  if (v.includes(' ')) return false;
+  return true;
+}
+
+function shortAddress(value: string): string {
+  const v = value.trim();
+  if (v.length <= 14) return v;
+  return `${v.slice(0, 6)}…${v.slice(-4)}`;
+}
+
+function isSubsequence(needle: string, haystack: string): boolean {
+  if (!needle) return false;
+  let i = 0;
+  for (let j = 0; j < haystack.length && i < needle.length; j += 1) {
+    if (haystack[j] === needle[i]) {
+      i += 1;
+    }
+  }
+  return i === needle.length;
+}
+
+function scoreSuggestion(query: string, suggestion: SearchSuggestion): number {
+  if (!query) return -Infinity;
+
+  const primary = suggestion.primary.toLowerCase();
+  const secondary = (suggestion.secondary ?? "").toLowerCase();
+  const addressRaw = suggestion.address ?? "";
+  const address = addressRaw.toLowerCase();
+  const terms = suggestion.terms.map(normalizeSearchToken);
+
+  const typeBoost = suggestion.kind === "sun" ? 30 : suggestion.kind === "planet" ? 20 : 10;
+
+  // Address targeting (0x…)
+  if (looksLikeHexAddress(query)) {
+    if (address && address === query) return 1200 + typeBoost;
+    if (address && address.startsWith(query)) return 1100 + typeBoost;
+    if (address && address.includes(query)) return 980 + typeBoost;
+  }
+
+  // Generic address targeting (works for non-0x addresses too; case-insensitive).
+  if (!looksLikeHexAddress(query) && looksLikeAnyAddress(query)) {
+    if (addressRaw && address === query) return 1150 + typeBoost;
+    if (addressRaw && address.startsWith(query)) return 1020 + typeBoost;
+    if (addressRaw && address.includes(query)) return 900 + typeBoost;
+  }
+
+  if (primary === query) return 1000 + typeBoost;
+  if (secondary === query) return 930 + typeBoost;
+  if (terms.includes(query)) return 900 + typeBoost;
+  if (primary.startsWith(query)) return 850 + typeBoost;
+  if (secondary.startsWith(query)) return 760 + typeBoost;
+  if (terms.some(t => t.startsWith(query))) return 720 + typeBoost;
+  if (primary.includes(query)) return 620 + typeBoost;
+  if (secondary.includes(query)) return 540 + typeBoost;
+  if (terms.some(t => t.includes(query))) return 500 + typeBoost;
+
+  const compactQuery = query.replace(/\s+/g, "");
+  const compactPrimary = primary.replace(/\s+/g, "");
+  const compactSecondary = secondary.replace(/\s+/g, "");
+
+  if (isSubsequence(compactQuery, compactPrimary)) return 430 + typeBoost;
+  if (isSubsequence(compactQuery, compactSecondary)) return 380 + typeBoost;
+
+  return -Infinity;
+}
+
+function toSearchSuggestion(node: GalaxyNode): SearchSuggestion {
+  const data = node.data as Record<string, unknown>;
+  const symbol = typeof data.symbol === "string" && data.symbol.trim().length ? data.symbol.trim() : null;
+  const name = typeof data.name === "string" && data.name.trim().length ? data.name.trim() : null;
+  const contractRaw = typeof data.contractAddress === "string" && data.contractAddress.trim().length ? data.contractAddress.trim() : null;
+  const legacyAddressRaw = typeof data.address === "string" && data.address.trim().length ? data.address.trim() : null;
+  const candidate = contractRaw ?? legacyAddressRaw;
+  const address = candidate && (looksLikeEvmAddress(candidate) || looksLikeBase58Address(candidate)) ? candidate : null;
+  const primary = symbol ?? name ?? node.id.toUpperCase();
+  const secondary = symbol && name ? name : symbol ? node.id.toUpperCase() : null;
+
+  const kind: SearchSuggestion["kind"] =
+    node.type === "sun" || node.type === "planet" || node.type === "moon" ? node.type : "moon";
+
+  const terms: string[] = [];
+  if (symbol) terms.push(symbol);
+  if (name) terms.push(name);
+  terms.push(node.id);
+  if (address) terms.push(address);
+  if (kind === "planet") {
+    // Treat chain identifiers as tag-like search terms.
+    const chainSymbol = typeof data.symbol === "string" ? data.symbol : null;
+    const chainName = typeof data.name === "string" ? data.name : null;
+    if (chainSymbol) terms.push(chainSymbol);
+    if (chainName) terms.push(chainName);
+  }
+  if (kind === "moon") {
+    // Add parent chain id as a tag-like term for token searches.
+    if (typeof node.parentId === "string" && node.parentId.trim()) {
+      terms.push(node.parentId);
+    }
+  }
+
+  const chainId = kind === 'moon' ? (typeof node.parentId === 'string' ? node.parentId : null) : (kind === 'planet' ? node.id : null);
+  const chainSymbol = kind === 'planet'
+    ? (typeof data.symbol === 'string' ? data.symbol : null)
+    : null;
+
+  const liquidityUsd = asNumber(data.liquidity);
+  const volume24hUsd = asNumber(data.volume24h);
+  const change24hPct = asNumber(data.change24h);
+
+  return {
+    id: node.id,
+    kind,
+    primary,
+    secondary,
+    address,
+    terms,
+    chainId,
+    chainSymbol,
+    liquidityUsd,
+    volume24hUsd,
+    change24hPct,
+  };
+}
+
+function labelKind(kind: SearchSuggestion["kind"]): string {
+  if (kind === "sun") return "SUN";
+  if (kind === "planet") return "CHAIN";
+  return "TOKEN";
+}
+
+function readStringProp(value: unknown, key: string): string | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const found = record[key];
+  return typeof found === 'string' && found.trim().length ? found : null;
+}
+
+function FloatingSearch({
+  nodes,
+  onTarget,
+}: {
+  nodes: readonly GalaxyNode[];
+  onTarget: (nodeId: string) => void;
+}) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const [isOpen, setIsOpen] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+
+  const suggestions = useMemo(() => {
+    const normalized = normalizeSearchQuery(query);
+    if (!normalized) return [] as SearchSuggestion[];
+
+    const planetsById = new Map(
+      nodes
+        .filter((n) => n.type === 'planet')
+        .map((n) => [n.id, n] as const)
+    );
+
+    const scored = nodes
+      .filter((node) => node.type === "sun" || node.type === "planet" || node.type === "moon")
+      .map((node) => {
+        const suggestion = toSearchSuggestion(node);
+        if (suggestion.kind === 'moon' && suggestion.chainId) {
+          const planet = planetsById.get(suggestion.chainId);
+          const pdata = (planet?.data ?? null) as unknown;
+          const planetSymbol = readStringProp(pdata, 'symbol');
+          const planetName = readStringProp(pdata, 'name');
+          suggestion.chainSymbol = planetSymbol;
+          if (planetSymbol) suggestion.terms.push(planetSymbol);
+          if (planetName) suggestion.terms.push(planetName);
+        }
+        return suggestion;
+      })
+      .map((suggestion) => ({
+        suggestion,
+        score: scoreSuggestion(normalized, suggestion),
+      }))
+      .filter((entry) => Number.isFinite(entry.score))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10)
+      .map((entry) => entry.suggestion);
+
+    return scored;
+  }, [nodes, query]);
+
+  const effectiveActiveIndex = suggestions.length
+    ? Math.max(0, Math.min(activeIndex, suggestions.length - 1))
+    : 0;
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent | TouchEvent) => {
+      const wrapper = wrapperRef.current;
+      if (!wrapper) return;
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (wrapper.contains(target)) return;
+      setIsOpen(false);
+      setActiveIndex(0);
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("touchstart", handlePointerDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("touchstart", handlePointerDown);
+    };
+  }, []);
+
+  const commitSelection = useCallback(
+    (selection: SearchSuggestion | null) => {
+      if (!selection) return;
+      onTarget(selection.id);
+      setQuery(selection.primary);
+      setIsOpen(false);
+      setActiveIndex(0);
+      inputRef.current?.blur();
+    },
+    [onTarget]
+  );
+
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLInputElement>) => {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+        setActiveIndex(0);
+        return;
+      }
+
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        setIsOpen(true);
+        setActiveIndex((prev) => {
+          if (!suggestions.length) return 0;
+          return Math.min(prev + 1, suggestions.length - 1);
+        });
+        return;
+      }
+
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        setIsOpen(true);
+        setActiveIndex((prev) => Math.max(prev - 1, 0));
+        return;
+      }
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        const selection = suggestions[effectiveActiveIndex] ?? suggestions[0] ?? null;
+        commitSelection(selection);
+      }
+    },
+    [commitSelection, effectiveActiveIndex, suggestions]
+  );
+
+  const showDropdown = isOpen && suggestions.length > 0;
+
+  return (
+    <div
+      ref={wrapperRef}
+      data-menu-ignore="true"
+      className="fixed top-5 left-1/2 -translate-x-1/2 z-50 w-[min(560px,92vw)] pointer-events-auto"
+    >
+      <div className="relative">
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={(e) => {
+            const next = e.target.value;
+            setQuery(next);
+            setIsOpen(Boolean(normalizeSearchQuery(next)));
+            setActiveIndex(0);
+          }}
+          onFocus={() => setIsOpen(Boolean(normalizeSearchQuery(query)))}
+          onKeyDown={handleKeyDown}
+          placeholder="Search chains or tokens…"
+          className="w-full bg-black/60 backdrop-blur-md border border-white/10 text-white px-4 py-2.5 rounded-full text-sm font-semibold shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40"
+          spellCheck={false}
+          autoComplete="off"
+          autoCorrect="off"
+          inputMode="search"
+        />
+
+        {showDropdown && (
+          <div className="absolute left-0 right-0 mt-2 bg-black/70 backdrop-blur-md border border-white/10 rounded-2xl overflow-hidden shadow-xl">
+            {suggestions.slice(0, 8).map((suggestion, idx) => {
+              const isActive = idx === effectiveActiveIndex;
+              const chainBadge = suggestion.kind === 'moon'
+                ? (suggestion.chainSymbol ?? (suggestion.chainId ? suggestion.chainId.toUpperCase() : null))
+                : (suggestion.kind === 'planet' ? (suggestion.chainSymbol ?? suggestion.primary) : null);
+
+              const hasLiquidity = typeof suggestion.liquidityUsd === 'number' && suggestion.liquidityUsd > 0;
+              const hasVol = typeof suggestion.volume24hUsd === 'number' && suggestion.volume24hUsd > 0;
+              const hasChange = typeof suggestion.change24hPct === 'number' && Number.isFinite(suggestion.change24hPct);
+
+              const metaParts: string[] = [];
+              if (suggestion.address) metaParts.push(shortAddress(suggestion.address));
+              if (hasLiquidity) metaParts.push(`Liq ${formatCompactUSD(suggestion.liquidityUsd!)}`);
+              if (hasVol) metaParts.push(`Vol ${formatCompactUSD(suggestion.volume24hUsd!)}`);
+              if (hasChange) metaParts.push(`24h ${formatPercentChange(suggestion.change24hPct!)}`);
+
+              return (
+                <button
+                  key={suggestion.id}
+                  type="button"
+                  onMouseEnter={() => setActiveIndex(idx)}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => commitSelection(suggestion)}
+                  className={`w-full text-left px-4 py-2.5 flex items-center gap-3 transition-colors ${
+                    isActive ? "bg-white/10" : "bg-transparent"
+                  }`}
+                >
+                  <span className="text-[11px] font-bold tracking-[0.25em] text-white/50 w-[70px]">
+                    {labelKind(suggestion.kind)}
+                  </span>
+                  <span className="flex-1 min-w-0">
+                    <span className="block text-sm font-semibold text-white truncate">
+                      {suggestion.primary}
+                      {chainBadge && suggestion.kind === 'moon' && (
+                        <span className="ml-2 inline-flex items-center align-middle text-[10px] font-bold tracking-[0.22em] text-white/55">
+                          {chainBadge.toUpperCase()}
+                        </span>
+                      )}
+                    </span>
+                    {metaParts.length > 0 ? (
+                      <span className="block text-[12px] text-white/55 truncate">{metaParts.join(' • ')}</span>
+                    ) : suggestion.secondary ? (
+                      <span className="block text-[12px] text-white/55 truncate">{suggestion.secondary}</span>
+                    ) : null}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function getNodeSymbolLabel(node: GalaxyNode): string {
+  const data = node.data as Record<string, unknown>;
+  const symbol = typeof data.symbol === "string" && data.symbol.trim().length > 0
+    ? data.symbol
+    : null;
+  const name = typeof data.name === "string" && data.name.trim().length > 0
+    ? data.name
+    : null;
+  return symbol ?? name ?? node.id.toUpperCase();
 }
 
 type QualityOverride = "full" | "lite" | null;
@@ -515,7 +956,7 @@ const MoonNode = ({
   
   // Only show price on larger moons where it's readable
   const canShowPrice = size > 35 && fontSize >= 12;
-  const canShowMetric = Boolean(metricDisplay) && size > 30;
+  const canShowMetric = Boolean(metricDisplay) && (size > 24 || detailLevel >= DETAIL_THRESHOLDS.moon.medium);
   
   // Size ratio display - hover to toggle between "x > next" and "x to BTC"
   // Check if this node CAN show the alternate "x to BTC" view
@@ -536,7 +977,7 @@ const MoonNode = ({
 
   const showIcon = Boolean(icon) && (moonLabelConfig.alwaysShowIcon || detailTier !== 'minimal');
   const showPriceDetail = detailTier !== 'minimal' && canShowPrice && price !== null;
-  const showMetricDetail = detailTier === 'full' && canShowMetric && Boolean(metricDisplay);
+  const showMetricDetail = detailTier !== 'minimal' && canShowMetric && Boolean(metricDisplay);
   const showRatioDetail = detailTier === 'full' && Boolean(sizeRatioDisplay);
 
   const tickerShadow = detailTier === 'full'
@@ -778,11 +1219,19 @@ export default function CryptoPlanets() {
     setRenderVersion((v) => (v + 1) % 1_000_000);
   }, []);
   const [weightMode, setWeightMode] = useState<WeightMode>("MarketCap");
+  const [volumeSource, setVolumeSource] = useState<VolumeSource>('dex');
+  const [primaryProvider, setPrimaryProvider] = useState<PrimaryProvider>('auto');
+  const [apiMeta, setApiMeta] = useState<GalaxyData['meta'] | null>(null);
   const cameraRef = useRef({ x: 0, y: 0, zoom: 0.05 });
   const camera = cameraRef.current;
   const [isLoading, setIsLoading] = useState(true);
   const [linkCopied, setLinkCopied] = useState(false);
   const [perfCopied, setPerfCopied] = useState(false);
+  const [copiedValue, setCopiedValue] = useState<string | null>(null);
+  const [showGpuPrototype, setShowGpuPrototype] = useState(false);
+  const [chartPickerNodeId, setChartPickerNodeId] = useState<string | null>(null);
+  const shouldRenderDomNodes = !showGpuPrototype;
+  const domInteractionsDisabled = showGpuPrototype;
   
   // Token filter state (default: hide stablecoins and wrapped)
   const [hideStables, setHideStables] = useState(true);
@@ -821,6 +1270,31 @@ export default function CryptoPlanets() {
   const latestVisibleNodesRef = useRef(0);
   const perfSummaryRef = useRef(perfSummary);
   const perfCopyTimeoutRef = useRef<number | null>(null);
+  const copyValueTimeoutRef = useRef<number | null>(null);
+  const galaxyStateRef = useRef<GalaxyState | null>(null);
+  const galaxyState = galaxyStateRef.current;
+
+  const gpuPrototypeNodes = useMemo(() => {
+    if (!galaxyState) return [] as GalaxyNode[];
+    return [
+      galaxyState.sunNode,
+      ...galaxyState.planetNodes,
+      ...galaxyState.moonNodes,
+    ];
+  }, [galaxyState, renderVersion]);
+  const deckViewState = useMemo(() => {
+    const safeZoom = Math.max(camera.zoom, 0.0001);
+    const target: [number, number, number] = [
+      -camera.x / safeZoom,
+      -camera.y / safeZoom,
+      0,
+    ];
+    const deckZoom = Number.isFinite(safeZoom) ? Math.log2(safeZoom) : -4;
+    return {
+      target,
+      zoom: Number.isFinite(deckZoom) ? deckZoom : -7,
+    };
+  }, [camera.x, camera.y, camera.zoom, renderVersion]);
   const [deviceInfo, setDeviceInfo] = useState<{ cores: number | null; dpr: number }>({
     cores: null,
     dpr: 1,
@@ -849,7 +1323,25 @@ export default function CryptoPlanets() {
     y: number;
     nodeId: string | null;
     nodeSymbol: string;
-  }>({ isOpen: false, x: 0, y: 0, nodeId: null, nodeSymbol: '' });
+    nodeIcon: string | null;
+    nodeType: 'sun' | 'planet' | 'moon' | 'meteorite' | null;
+    view: 'actions' | 'details';
+  }>({ isOpen: false, x: 0, y: 0, nodeId: null, nodeSymbol: '', nodeIcon: null, nodeType: null, view: 'actions' });
+
+  const showRadialMenuForNode = useCallback((node: GalaxyNode, clientX: number, clientY: number) => {
+    const data = node.data as unknown as { icon?: unknown };
+    const icon = typeof data.icon === 'string' ? data.icon : null;
+    setRadialMenu({
+      isOpen: true,
+      x: clientX,
+      y: clientY,
+      nodeId: node.id,
+      nodeSymbol: getNodeSymbolLabel(node),
+      nodeIcon: icon,
+      nodeType: node.type,
+      view: 'actions',
+    });
+  }, []);
   
   // Mobile detection
   const [isMobile, setIsMobile] = useState(false);
@@ -966,6 +1458,27 @@ export default function CryptoPlanets() {
       if (resizeFrame) cancelAnimationFrame(resizeFrame);
     };
   }, [searchParams]);
+
+  // Load + persist primary data provider preference
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const stored = window.localStorage.getItem('planetchart:primaryProvider');
+      if (stored) setPrimaryProvider(normalizePrimaryProvider(stored));
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const updatePrimaryProvider = useCallback((next: PrimaryProvider) => {
+    setPrimaryProvider(next);
+    if (typeof window === 'undefined') return;
+    try {
+      window.localStorage.setItem('planetchart:primaryProvider', next);
+    } catch {
+      // ignore
+    }
+  }, []);
   
   const isCircleVisible = useCallback((x: number, y: number, radius: number) => {
     if (viewportSize.width <= 0 || viewportSize.height <= 0) {
@@ -1019,8 +1532,6 @@ export default function CryptoPlanets() {
   
   const requestRef = useRef<number>(0);
   const previousTimeRef = useRef<number>(0);
-  const galaxyStateRef = useRef<GalaxyState | null>(null);
-  const galaxyState = galaxyStateRef.current;
   const lastRenderTimeRef = useRef(0);
 
   // Compute the display name for the currently followed node
@@ -1114,6 +1625,9 @@ export default function CryptoPlanets() {
       if (perfCopyTimeoutRef.current) {
         clearTimeout(perfCopyTimeoutRef.current);
       }
+      if (copyValueTimeoutRef.current) {
+        clearTimeout(copyValueTimeoutRef.current);
+      }
     };
   }, []);
 
@@ -1156,6 +1670,7 @@ export default function CryptoPlanets() {
   useEffect(() => {
     const followParam = searchParams.get('follow');
     const metricParam = searchParams.get('metric');
+    const volumeSourceParam = searchParams.get('volumeSource');
     
     if (!initialUrlProcessed.current) {
       // Default to BTC if no follow param specified
@@ -1165,10 +1680,14 @@ export default function CryptoPlanets() {
     if (metricParam && ['TVL', 'MarketCap', 'Volume24h', 'Change24h'].includes(metricParam)) {
       setWeightMode(metricParam as WeightMode);
     }
+
+    if (volumeSourceParam === 'spot' || volumeSourceParam === 'dex') {
+      setVolumeSource(volumeSourceParam);
+    }
   }, [searchParams]);
 
   // Track previous filter state to detect changes
-  const prevFiltersRef = useRef({ hideStables, hideWrapped, weightMode, qualityMode });
+  const prevFiltersRef = useRef({ hideStables, hideWrapped, weightMode, qualityMode, volumeSource, primaryProvider });
 
   const applyQualityBudgets = useCallback((data: GalaxyData): GalaxyData => {
     if (qualityMode !== 'lite') {
@@ -1201,32 +1720,67 @@ export default function CryptoPlanets() {
     const prevFilters = prevFiltersRef.current;
     const isWeightModeChange = prevFilters.weightMode !== weightMode;
     const isQualityModeChange = prevFilters.qualityMode !== qualityMode;
+    const isVolumeSourceChange = prevFilters.volumeSource !== volumeSource;
+    const isPrimaryProviderChange = prevFilters.primaryProvider !== primaryProvider;
     
     // Update ref
-    prevFiltersRef.current = { hideStables, hideWrapped, weightMode, qualityMode };
+    prevFiltersRef.current = { hideStables, hideWrapped, weightMode, qualityMode, volumeSource, primaryProvider };
     
     async function init() {
+      const hadExistingState = !!galaxyStateRef.current;
+      const followIdAtStart = followingIdRef.current;
+
       // Only show loading spinner for weight mode changes (takes longer)
-      if (isWeightModeChange || isQualityModeChange || !galaxyStateRef.current) {
+      if (isWeightModeChange || isQualityModeChange || isPrimaryProviderChange || !galaxyStateRef.current) {
         setIsLoading(true);
       }
       
       try {
-        const data = await loadGalaxyData(weightMode, { hideStables, hideWrapped });
+        const data = await loadGalaxyData(weightMode, { hideStables, hideWrapped }, { volumeSource, primaryProvider });
+        setApiMeta(data.meta || null);
         const shapedData = applyQualityBudgets(data);
         const initialState = initGalaxyState(shapedData);
 
-        // Only reset camera on fresh init or weight mode change
-        if (isWeightModeChange || isQualityModeChange || !galaxyStateRef.current) {
+        galaxyStateRef.current = initialState;
+
+        // Preserve follow across metric/quality changes.
+        // If we're currently following something and it still exists, re-center on it.
+        // Otherwise, fall back to normal camera reset behavior.
+        if (followIdAtStart) {
+          const followedNode = initialState.nodes.find(n => n.id === followIdAtStart);
+          if (followedNode) {
+            const viewportWidth = window.innerWidth;
+            const viewportHeight = window.innerHeight;
+            const idealZoom = calculateIdealZoom(
+              followedNode.radius,
+              followedNode.type as 'sun' | 'planet' | 'moon',
+              viewportWidth,
+              viewportHeight
+            );
+
+            transitionRef.current = null;
+            setIsTransitioning(false);
+            setFollowingId(followIdAtStart);
+            setTargetZoom(idealZoom);
+            cameraRef.current = {
+              x: -followedNode.x * idealZoom,
+              y: -followedNode.y * idealZoom,
+              zoom: idealZoom,
+            };
+          } else {
+            // Node disappeared under the new metric/filter/budget; release follow.
+            transitionRef.current = null;
+            setIsTransitioning(false);
+            setFollowingId(null);
+          }
+        } else if (isWeightModeChange || isQualityModeChange || isPrimaryProviderChange || !hadExistingState || (weightMode === 'Volume24h' && isVolumeSourceChange)) {
+          // Only reset camera on fresh init or major mode changes when not following.
           cameraRef.current = { x: 0, y: 0, zoom: 0.03 };
           setTargetZoom(0.03);
-          // Clear follow on weight mode change
-          setFollowingId(null);
           transitionRef.current = null;
           setIsTransitioning(false);
         }
 
-        galaxyStateRef.current = initialState;
         forceRender();
       } catch (e) {
         console.error("Failed to init galaxy:", e);
@@ -1235,7 +1789,7 @@ export default function CryptoPlanets() {
       }
     }
     init();
-  }, [weightMode, hideStables, hideWrapped, qualityMode, applyQualityBudgets, forceRender]);
+  }, [weightMode, volumeSource, hideStables, hideWrapped, qualityMode, primaryProvider, applyQualityBudgets, forceRender]);
   
   // Process pending follow from URL after galaxy is loaded
   useEffect(() => {
@@ -1417,14 +1971,23 @@ export default function CryptoPlanets() {
     setTargetZoom(idealZoom);
   }, []);
 
-  // Camera wheel zoom - ZOOM TO CURSOR or ZOOM TO FOLLOWED ENTITY
+  // Camera wheel zoom - disabled when GPU deck controller is active
   useEffect(() => {
+    if (domInteractionsDisabled) {
+      return;
+    }
+
     const clampZoom = (value: number) =>
       Math.max(CAMERA_CONFIG.minZoom, Math.min(CAMERA_CONFIG.maxZoom, value));
 
     const handleWheel = (e: WheelEvent) => {
       const container = containerRef.current;
       if (!container) return;
+
+      // Allow scrolling within UI overlays (e.g., the Navigate list) without zooming the universe.
+      if (isUiEventTarget(e.target)) {
+        return;
+      }
 
       e.preventDefault();
 
@@ -1464,7 +2027,7 @@ export default function CryptoPlanets() {
 
     window.addEventListener('wheel', handleWheel, { passive: false });
     return () => window.removeEventListener('wheel', handleWheel);
-  }, []);
+  }, [domInteractionsDisabled, forceRender]);
 
   const openRadialMenuAt = useCallback((clientX: number, clientY: number) => {
     const snapshot = galaxyStateRef.current;
@@ -1496,24 +2059,37 @@ export default function CryptoPlanets() {
       const hitRadius = Math.max(node.radius * 1.2, minHitRadius);
 
       if (dist < hitRadius) {
-        const symbol = ('symbol' in node.data ? node.data.symbol : null)
-          || ('name' in node.data ? node.data.name : null)
-          || node.id.toUpperCase();
-
-        setRadialMenu({
-          isOpen: true,
-          x: clientX,
-          y: clientY,
-          nodeId: node.id,
-          nodeSymbol: symbol,
-        });
+        showRadialMenuForNode(node, clientX, clientY);
         return true;
       }
     }
 
     setRadialMenu(prev => ({ ...prev, isOpen: false }));
     return false;
-  }, []);
+  }, [showRadialMenuForNode]);
+
+  const handleDeckNodePick = useCallback((payload: {
+    node: GalaxyNode;
+    x: number;
+    y: number;
+    isRightClick: boolean;
+  }) => {
+    showRadialMenuForNode(payload.node, payload.x, payload.y);
+  }, [showRadialMenuForNode]);
+
+  const handleDeckViewChange = useCallback((next: { target: [number, number, number]; zoom: number }) => {
+    const exponentialZoom = Math.pow(2, next.zoom);
+    const clampedZoom = Math.max(CAMERA_CONFIG.minZoom, Math.min(CAMERA_CONFIG.maxZoom, exponentialZoom));
+    cameraRef.current = {
+      ...cameraRef.current,
+      x: -next.target[0] * clampedZoom,
+      y: -next.target[1] * clampedZoom,
+      zoom: clampedZoom,
+    };
+    setTargetZoom(clampedZoom);
+    forceRender();
+  }, [forceRender]);
+
 
   // Drag handling
   const [isDragging, setIsDragging] = useState(false);
@@ -1775,7 +2351,8 @@ export default function CryptoPlanets() {
             <path d="M12 16v-4m0-4h.01" />
           </svg>
         ),
-        onClick: () => console.log('View details:', radialMenu.nodeId),
+        onClick: () => setRadialMenu(prev => ({ ...prev, view: 'details' })),
+        closeOnClick: false,
       },
       {
         id: 'isolate',
@@ -1790,6 +2367,342 @@ export default function CryptoPlanets() {
       },
     ];
   }, [followingId, radialMenu.nodeId, handleFollowPlanet]);
+
+  const radialMenuCenterContent = useMemo(() => {
+    const title = radialMenu.nodeSymbol;
+    const iconUrl = radialMenu.nodeIcon;
+    const typeLabel = radialMenu.nodeType === 'moon' ? 'TOKEN'
+      : radialMenu.nodeType === 'planet' ? 'CHAIN'
+      : radialMenu.nodeType === 'sun' ? 'SUN'
+      : '';
+
+    return (
+      <div className="flex flex-col items-center justify-center gap-1">
+        <div className="w-9 h-9 rounded-full bg-white/5 border border-white/10 overflow-hidden flex items-center justify-center">
+          {iconUrl ? (
+            <img src={iconUrl} alt={title} className="w-full h-full object-cover" />
+          ) : (
+            <div className="text-xs font-bold text-white/70">{String(title).slice(0, 2).toUpperCase()}</div>
+          )}
+        </div>
+        <div className="text-[10px] font-semibold text-white/70 uppercase tracking-wider text-center px-2 leading-tight">
+          {title}
+        </div>
+        {typeLabel && (
+          <div className="text-[9px] text-white/35 uppercase tracking-[0.35em]">
+            {typeLabel}
+          </div>
+        )}
+      </div>
+    );
+  }, [radialMenu.nodeIcon, radialMenu.nodeSymbol, radialMenu.nodeType]);
+
+  const radialMenuNode = useMemo(() => {
+    const snapshot = galaxyStateRef.current;
+    if (!snapshot || !radialMenu.nodeId) return null;
+    return snapshot.nodes.find(n => n.id === radialMenu.nodeId) ?? null;
+  }, [radialMenu.nodeId, renderVersion]);
+
+  const radialMenuPanelContent = useMemo(() => {
+    if (radialMenu.view !== 'details' || !radialMenuNode) return null;
+
+    const typeLabel = radialMenuNode.type === 'moon' ? 'Token'
+      : radialMenuNode.type === 'planet' ? 'Chain'
+      : radialMenuNode.type === 'sun' ? 'Sun'
+      : 'Object';
+
+    const symbol = ('symbol' in radialMenuNode.data ? radialMenuNode.data.symbol : null)
+      || ('name' in radialMenuNode.data ? radialMenuNode.data.name : null)
+      || radialMenuNode.id.toUpperCase();
+
+    const name = ('name' in radialMenuNode.data ? radialMenuNode.data.name : null) as string | null;
+    const icon = (() => {
+      const data = radialMenuNode.data as unknown as { icon?: unknown };
+      return typeof data.icon === 'string' ? data.icon : null;
+    })();
+
+    const tokenData: TokenData | null = radialMenuNode.type === 'moon'
+      ? (radialMenuNode.data as TokenData)
+      : null;
+    const chainData: ChainData | null = radialMenuNode.type === 'planet'
+      ? (radialMenuNode.data as ChainData)
+      : null;
+    const btcData: BTCData | null = radialMenuNode.type === 'sun'
+      ? (radialMenuNode.data as BTCData)
+      : null;
+
+    const contractAddress = tokenData?.contractAddress;
+    const geckoId = tokenData?.geckoId || chainData?.geckoId;
+    const parentChainId = radialMenuNode.parentId as string | null;
+
+    const fmtUsd = (v: number | undefined) => {
+      if (!Number.isFinite(v)) return '—';
+      const value = v as number;
+      if (value >= 1e12) return `$${(value / 1e12).toFixed(2)}T`;
+      if (value >= 1e9) return `$${(value / 1e9).toFixed(2)}B`;
+      if (value >= 1e6) return `$${(value / 1e6).toFixed(2)}M`;
+      if (value >= 1e3) return `$${(value / 1e3).toFixed(2)}K`;
+      if (value >= 1) return `$${value.toFixed(2)}`;
+      return `$${value.toPrecision(3)}`;
+    };
+
+    const fmtPct = (v: number | undefined) => {
+      if (!Number.isFinite(v)) return '—';
+      const value = v as number;
+      const sign = value > 0 ? '+' : '';
+      return `${sign}${value.toFixed(2)}%`;
+    };
+
+    const guessDexScreenerChain = (chainId: string | null) => {
+      if (!chainId) return null;
+      const key = chainId.toLowerCase();
+      const map: Record<string, string> = {
+        ethereum: 'ethereum',
+        arbitrum: 'arbitrum',
+        optimism: 'optimism',
+        polygon: 'polygon',
+        base: 'base',
+        avalanche: 'avalanche',
+        bnb: 'bsc',
+        bsc: 'bsc',
+        solana: 'solana',
+        fantom: 'fantom',
+        pulsechain: 'pulsechain',
+      };
+      return map[key] ?? null;
+    };
+
+    const dexChain = guessDexScreenerChain(parentChainId || (chainData?.id as string | undefined) || null);
+    const dexUrl = (() => {
+      const fromData = tokenData?.dexScreenerUrl;
+      if (typeof fromData === 'string' && fromData.length > 0) return fromData;
+      return contractAddress && dexChain
+        ? `https://dexscreener.com/${dexChain}/${contractAddress}`
+        : null;
+    })();
+    const geckoUrl = geckoId
+      ? `https://www.coingecko.com/en/coins/${geckoId}`
+      : null;
+
+    const tvUrl = symbol
+      ? (() => {
+          const dexId = tokenData?.dexScreenerDexId;
+          const baseSym = tokenData?.dexScreenerBaseSymbol;
+          const quoteSym = tokenData?.dexScreenerQuoteSymbol;
+          const pairAddr = tokenData?.dexPairAddress;
+          if (dexId && baseSym && quoteSym && pairAddr && pairAddr.length >= 6) {
+            const tvSymbol = `${dexId.toUpperCase()}:${String(baseSym).toUpperCase()}${String(quoteSym).toUpperCase()}_${pairAddr.slice(0, 6).toUpperCase()}.USD`;
+            return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol)}`;
+          }
+          return `https://www.tradingview.com/symbols/?query=${encodeURIComponent(symbol)}`;
+        })()
+      : null;
+    const cmcUrl = symbol
+      ? `https://coinmarketcap.com/search/?q=${encodeURIComponent(symbol)}`
+      : null;
+
+    const matchaUrl = (() => {
+      if (!contractAddress) return null;
+      const key = String(parentChainId || chainData?.id || '').toLowerCase();
+      const map: Record<string, string> = {
+        ethereum: 'ethereum',
+        arbitrum: 'arbitrum',
+        optimism: 'optimism',
+        polygon: 'polygon',
+        base: 'base',
+        avalanche: 'avalanche',
+        bnb: 'bnb',
+        bsc: 'bnb',
+        fantom: 'fantom',
+        pulsechain: 'pulsechain',
+        solana: 'solana',
+      };
+      const chainSlug = map[key];
+      if (!chainSlug) return null;
+      return `https://matcha.xyz/tokens/${chainSlug}/${contractAddress}`;
+    })();
+
+    const isChartPickerOpen = chartPickerNodeId === radialMenuNode.id;
+
+    const rows: Array<{ label: string; value: string; copyValue?: string }> = [];
+
+    rows.push({ label: 'Type', value: typeLabel });
+    if (name && name.toLowerCase() !== symbol.toLowerCase()) rows.push({ label: 'Name', value: name });
+
+    if (radialMenuNode.type === 'moon') {
+      rows.push({ label: 'Price', value: fmtUsd(tokenData?.price) });
+      rows.push({ label: '24h', value: fmtPct(tokenData?.change24h) });
+      rows.push({ label: 'Liquidity', value: fmtUsd(tokenData?.liquidity) });
+      rows.push({ label: 'Volume 24h', value: fmtUsd(tokenData?.volume24h) });
+      rows.push({ label: 'Market Cap', value: fmtUsd(tokenData?.marketCap) });
+      if (contractAddress) rows.push({ label: 'Address', value: `${contractAddress.slice(0, 6)}…${contractAddress.slice(-4)}`, copyValue: contractAddress });
+    } else if (radialMenuNode.type === 'planet') {
+      rows.push({ label: 'TVL', value: fmtUsd(chainData?.tvl) });
+      rows.push({ label: '24h', value: fmtPct(chainData?.change24h) });
+      rows.push({ label: 'Volume 24h', value: fmtUsd(chainData?.volume24h) });
+      rows.push({ label: 'Dominance', value: fmtPct(chainData?.dominance) });
+    } else if (radialMenuNode.type === 'sun') {
+      rows.push({ label: 'Price', value: fmtUsd(btcData?.price) });
+      rows.push({ label: '24h', value: fmtPct(btcData?.change24h) });
+      rows.push({ label: 'Market Cap', value: fmtUsd(btcData?.marketCap) });
+      rows.push({ label: 'Dominance', value: fmtPct(btcData?.dominance) });
+    }
+
+    return (
+      <div className="p-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-full bg-white/5 border border-white/10 overflow-hidden flex items-center justify-center">
+            {icon ? (
+              <img src={icon} alt={symbol} className="w-full h-full object-cover" />
+            ) : (
+              <div className="text-sm font-bold text-white/80">{String(symbol).slice(0, 2).toUpperCase()}</div>
+            )}
+          </div>
+          <div className="min-w-0">
+            <div className="text-sm font-semibold text-white truncate">{symbol}</div>
+            <div className="text-[11px] uppercase tracking-[0.25em] text-white/40">{typeLabel}</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setRadialMenu(prev => ({ ...prev, view: 'actions' }))}
+            className="ml-auto text-white/40 hover:text-white/70 transition-colors"
+            title="Back"
+          >
+            ←
+          </button>
+        </div>
+
+        <div className="mt-3 space-y-2">
+          {rows.map((row) => (
+            <div key={row.label} className="flex items-baseline justify-between gap-4">
+              <div className="text-[11px] uppercase tracking-[0.2em] text-white/35">{row.label}</div>
+              <div className="flex items-center gap-2">
+                <div className="text-[12px] text-white/80 font-semibold text-right">{row.value}</div>
+                {row.copyValue && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const v = row.copyValue;
+                      if (!v) return;
+                      if (copyValueTimeoutRef.current) clearTimeout(copyValueTimeoutRef.current);
+                      const setDone = () => {
+                        setCopiedValue(v);
+                        copyValueTimeoutRef.current = window.setTimeout(() => setCopiedValue(null), 1200);
+                      };
+
+                      if (typeof navigator !== 'undefined' && navigator.clipboard) {
+                        navigator.clipboard.writeText(v).then(setDone).catch(setDone);
+                      } else {
+                        setDone();
+                      }
+                    }}
+                    className="px-2 py-1 rounded-lg bg-white/5 border border-white/10 text-white/60 text-[11px] font-semibold hover:bg-white/10"
+                    title="Copy address"
+                  >
+                    {copiedValue === row.copyValue ? 'Copied' : 'Copy'}
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-4 flex gap-2">
+          <button
+            type="button"
+            onClick={() => handleFollowPlanet(radialMenuNode.id)}
+            className="flex-1 px-3 py-2 rounded-xl bg-cyan-500/15 border border-cyan-400/25 text-cyan-200 text-xs font-semibold"
+          >
+            Follow
+          </button>
+          <button
+            type="button"
+            onClick={() => handleFollowPlanet(null)}
+            className="flex-1 px-3 py-2 rounded-xl bg-red-500/10 border border-red-400/20 text-red-200 text-xs font-semibold"
+          >
+            Release
+          </button>
+        </div>
+
+        <div className="mt-3 flex gap-2">
+          {(dexUrl || geckoUrl || tvUrl || cmcUrl || matchaUrl) && (
+            <button
+              type="button"
+              onClick={() => setChartPickerNodeId(isChartPickerOpen ? null : radialMenuNode.id)}
+              className="flex-1 px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white/70 text-xs font-semibold"
+            >
+              Open chart
+            </button>
+          )}
+        </div>
+
+        {isChartPickerOpen && (
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            {dexUrl && (
+              <button
+                type="button"
+                onClick={() => {
+                  window.open(dexUrl, '_blank', 'noopener,noreferrer');
+                  setChartPickerNodeId(null);
+                }}
+                className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white/70 text-xs font-semibold"
+              >
+                DexScreener
+              </button>
+            )}
+            {geckoUrl && (
+              <button
+                type="button"
+                onClick={() => {
+                  window.open(geckoUrl, '_blank', 'noopener,noreferrer');
+                  setChartPickerNodeId(null);
+                }}
+                className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white/70 text-xs font-semibold"
+              >
+                CoinGecko
+              </button>
+            )}
+            {tvUrl && (
+              <button
+                type="button"
+                onClick={() => {
+                  window.open(tvUrl, '_blank', 'noopener,noreferrer');
+                  setChartPickerNodeId(null);
+                }}
+                className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white/70 text-xs font-semibold"
+              >
+                TradingView
+              </button>
+            )}
+            {cmcUrl && (
+              <button
+                type="button"
+                onClick={() => {
+                  window.open(cmcUrl, '_blank', 'noopener,noreferrer');
+                  setChartPickerNodeId(null);
+                }}
+                className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white/70 text-xs font-semibold"
+              >
+                CoinMarketCap
+              </button>
+            )}
+            {matchaUrl && (
+              <button
+                type="button"
+                onClick={() => {
+                  window.open(matchaUrl, '_blank', 'noopener,noreferrer');
+                  setChartPickerNodeId(null);
+                }}
+                className="px-3 py-2 rounded-xl bg-white/5 border border-white/10 text-white/70 text-xs font-semibold"
+              >
+                Matcha
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }, [radialMenu.view, radialMenuNode, handleFollowPlanet, renderVersion, chartPickerNodeId, copiedValue]);
 
   if (isLoading || !galaxyState) {
     return (
@@ -1827,72 +2740,98 @@ export default function CryptoPlanets() {
     <div
       ref={containerRef}
       className={`relative w-full h-screen bg-black overflow-hidden select-none ${isMobile ? 'no-touch-select' : ''}`}
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={handleMouseUp}
-      onMouseLeave={handleMouseLeave}
-      onContextMenu={handleContextMenu}
-      onTouchStart={handleTouchStart}
-      onTouchMove={handleTouchMove}
-      onTouchEnd={handleTouchEnd}
+      onMouseDown={domInteractionsDisabled ? undefined : handleMouseDown}
+      onMouseMove={domInteractionsDisabled ? undefined : handleMouseMove}
+      onMouseUp={domInteractionsDisabled ? undefined : handleMouseUp}
+      onMouseLeave={domInteractionsDisabled ? undefined : handleMouseLeave}
+      onContextMenu={domInteractionsDisabled ? undefined : handleContextMenu}
+      onTouchStart={domInteractionsDisabled ? undefined : handleTouchStart}
+      onTouchMove={domInteractionsDisabled ? undefined : handleTouchMove}
+      onTouchEnd={domInteractionsDisabled ? undefined : handleTouchEnd}
     >
       <Starfield qualityMode={qualityMode} />
 
+      {!isMobile && (
+        <FloatingSearch
+          nodes={galaxyState.nodes}
+          onTarget={(nodeId) => handleFollowPlanet(nodeId)}
+        />
+      )}
+
+      {showGpuPrototype && (
+        <div className="absolute inset-0 z-20 pointer-events-auto" data-menu-ignore="true">
+          <DeckGalaxyPrototype
+            nodes={gpuPrototypeNodes}
+            highlightedId={followingId}
+            viewState={deckViewState}
+            interactive
+            onNodeClick={handleDeckNodePick}
+            onViewStateChange={handleDeckViewChange}
+            className="w-full h-full"
+          />
+          <div className="pointer-events-none absolute top-6 right-6 px-4 py-2 rounded-full text-xs font-semibold tracking-[0.3em] uppercase bg-fuchsia-500/20 border border-fuchsia-400/40 text-fuchsia-200">
+            GPU Renderer Active
+          </div>
+        </div>
+      )}
+
       {/* Galaxy container with camera shake */}
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          transform: `translate(${camera.x + getShakeOffset().x}px, ${camera.y + getShakeOffset().y}px) scale(${camera.zoom})`,
-          transformOrigin: 'center center',
-        }}
-      >
-        {/* Center origin wrapper - makes (0,0) the center of the viewport */}
-        <div 
+      {shouldRenderDomNodes && (
+        <div
+          className="absolute inset-0 pointer-events-none"
           style={{
-            position: 'absolute',
-            left: '50%',
-            top: '50%',
-            width: 0,
-            height: 0,
+            transform: `translate(${camera.x + getShakeOffset().x}px, ${camera.y + getShakeOffset().y}px) scale(${camera.zoom})`,
+            transformOrigin: 'center center',
           }}
         >
-          {/* Orbit rings */}
-          {visibleOrbitRings.map(node => (
-            <OrbitRing key={`ring-${node.id}`} radius={node.orbitRadius} />
-          ))}
+          {/* Center origin wrapper - makes (0,0) the center of the viewport */}
+          <div 
+            style={{
+              position: 'absolute',
+              left: '50%',
+              top: '50%',
+              width: 0,
+              height: 0,
+            }}
+          >
+            {/* Orbit rings */}
+            {visibleOrbitRings.map(node => (
+              <OrbitRing key={`ring-${node.id}`} radius={node.orbitRadius} />
+            ))}
 
-          {/* Sun */}
-          <PlanetNode 
-            key={galaxyState.sunNode.id} 
-            node={galaxyState.sunNode}
-            weightMode={weightMode}
-            detailLevel={camera.zoom}
-          />
-
-          {/* Planets */}
-          {visiblePlanets.map(node => (
+            {/* Sun */}
             <PlanetNode 
-              key={node.id} 
-              node={node}
+              key={galaxyState.sunNode.id} 
+              node={galaxyState.sunNode}
               weightMode={weightMode}
               detailLevel={camera.zoom}
             />
-          ))}
 
-          {/* Moons */}
-          {visibleMoons.map(node => (
-            <MoonNode 
-              key={node.id} 
-              node={node}
-              weightMode={weightMode}
-              detailLevel={camera.zoom}
-            />
-          ))}
+            {/* Planets */}
+            {visiblePlanets.map(node => (
+              <PlanetNode 
+                key={node.id} 
+                node={node}
+                weightMode={weightMode}
+                detailLevel={camera.zoom}
+              />
+            ))}
 
-          {/* Collision particle effects */}
-          <ParticleLayer particles={visibleParticles} />
+            {/* Moons */}
+            {visibleMoons.map(node => (
+              <MoonNode 
+                key={node.id} 
+                node={node}
+                weightMode={weightMode}
+                detailLevel={camera.zoom}
+              />
+            ))}
+
+            {/* Collision particle effects */}
+            <ParticleLayer particles={visibleParticles} />
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Galaxy HUD - Chain Navigation (Desktop only) */}
       {!isMobile && (
@@ -1905,6 +2844,9 @@ export default function CryptoPlanets() {
             zoom={camera.zoom}
             qualityMode={qualityMode}
             qualityReasons={qualityReasons}
+            primaryProvider={primaryProvider}
+            onPrimaryProviderChange={updatePrimaryProvider}
+            providerMeta={apiMeta || undefined}
           />
         </div>
       )}
@@ -1915,6 +2857,7 @@ export default function CryptoPlanets() {
           <MobileHUD
             planets={galaxyState.planetNodes}
             sun={galaxyState.sunNode}
+            nodes={galaxyState.nodes}
             followingId={followingId}
             onFollowPlanet={handleFollowPlanet}
             zoom={camera.zoom}
@@ -1936,6 +2879,9 @@ export default function CryptoPlanets() {
             followingInfo={followingInfo}
             qualityMode={qualityMode}
             qualityReasons={qualityReasons}
+            primaryProvider={primaryProvider}
+            onPrimaryProviderChange={updatePrimaryProvider}
+            providerMeta={apiMeta || undefined}
           />
         </div>
       )}
@@ -1947,9 +2893,11 @@ export default function CryptoPlanets() {
             isOpen={radialMenu.isOpen}
             x={radialMenu.x}
             y={radialMenu.y}
-            items={getRadialMenuItems()}
-            onClose={() => setRadialMenu(prev => ({ ...prev, isOpen: false }))}
+            items={radialMenu.view === 'details' ? [] : getRadialMenuItems()}
+            onClose={() => setRadialMenu(prev => ({ ...prev, isOpen: false, view: 'actions' }))}
             title={radialMenu.nodeSymbol}
+            centerContent={radialMenuCenterContent}
+            panelContent={radialMenuPanelContent}
           />
         </div>
       )}
@@ -1959,9 +2907,16 @@ export default function CryptoPlanets() {
         <div data-menu-ignore="true" className="absolute top-0 left-0 w-full h-full pointer-events-none p-6 flex flex-col justify-between z-40">
           <div className="flex flex-col gap-4">
             <div className="flex items-start gap-6">
-              <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 ml-48">
-                <h1 className="text-2xl font-bold text-white mb-2">Crypto Galaxy</h1>
-                <p className="text-sm text-white/60">See every chain and token at its true-to-scale footprint across the crypto galaxy.</p>
+              <div className="bg-black/40 backdrop-blur-xl rounded-2xl p-5 border border-white/10 shadow-2xl ml-52">
+                <div className="text-[10px] uppercase tracking-[0.35em] text-white/50 font-semibold">
+                  CryptoPlanets
+                </div>
+                <h1 className="mt-1 text-xl font-semibold tracking-tight text-white">
+                  Crypto Galaxy
+                </h1>
+                <p className="mt-2 text-xs leading-relaxed text-white/60 max-w-[34ch]">
+                  Explore chains and tokens at true-to-scale footprints across the crypto galaxy.
+                </p>
               </div>
 
               <div className="ml-auto flex flex-col items-end gap-3">
@@ -1979,14 +2934,65 @@ export default function CryptoPlanets() {
                     } else {
                       url.searchParams.delete('metric');
                     }
+
+                    // Volume source is only meaningful for Volume24h.
+                    if (newMode === 'Volume24h') {
+                      url.searchParams.set('volumeSource', volumeSource);
+                    } else {
+                      url.searchParams.delete('volumeSource');
+                    }
                     window.history.replaceState({}, '', url.toString());
                   }}
                 >
                   <option value="TVL"> TVL</option>
                   <option value="MarketCap">Size by Market Cap</option>
-                  <option value="Volume24h">Size by 24h Volume</option>
+                  <option value="Volume24h">Size by 24H Volume</option>
                   <option value="Change24h">Size by 24h Change</option>
                 </select>
+
+                {weightMode === 'Volume24h' && (
+                  <div className="pointer-events-auto flex items-center gap-2">
+                    <span className="text-[10px] uppercase tracking-[0.3em] text-white/50">Volume</span>
+                    <div className="flex rounded-xl border border-white/10 bg-black/40 backdrop-blur-md p-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVolumeSource('dex');
+                          const url = new URL(window.location.href);
+                          url.searchParams.set('volumeSource', 'dex');
+                          window.history.replaceState({}, '', url.toString());
+                        }}
+                        aria-pressed={volumeSource === 'dex'}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                          volumeSource === 'dex'
+                            ? 'bg-cyan-500/20 text-cyan-200 border border-cyan-400/30'
+                            : 'text-white/60 hover:text-white hover:bg-white/5'
+                        }`}
+                        title="DEX volume (DefiLlama)"
+                      >
+                        DEX
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVolumeSource('spot');
+                          const url = new URL(window.location.href);
+                          url.searchParams.set('volumeSource', 'spot');
+                          window.history.replaceState({}, '', url.toString());
+                        }}
+                        aria-pressed={volumeSource === 'spot'}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                          volumeSource === 'spot'
+                            ? 'bg-purple-500/20 text-purple-200 border border-purple-400/30'
+                            : 'text-white/60 hover:text-white hover:bg-white/5'
+                        }`}
+                        title="Spot/CEX trading volume (CoinGecko)"
+                      >
+                        CEX
+                      </button>
+                    </div>
+                  </div>
+                )}
 
                 <div className="flex gap-2 pointer-events-auto flex-wrap justify-end">
                   <button
@@ -2044,6 +3050,24 @@ export default function CryptoPlanets() {
                       </span>
                     </span>
                   </button>
+
+                  <button
+                    onClick={() => setShowGpuPrototype(prev => !prev)}
+                    className={`flex items-center gap-3 px-3 py-2 rounded-2xl border text-xs font-semibold tracking-wide uppercase transition-all shadow-sm ${
+                      showGpuPrototype
+                        ? 'bg-fuchsia-500/15 border-fuchsia-400/40 text-fuchsia-100 hover:border-fuchsia-300'
+                        : 'bg-white/5 border-white/20 text-white/70 hover:border-white/40'
+                    }`}
+                    title="Toggle experimental deck.gl renderer"
+                  >
+                    <span className={`w-3 h-3 rounded-full ${showGpuPrototype ? 'bg-fuchsia-300 animate-pulse' : 'bg-white/40'}`} />
+                    <span className="flex flex-col leading-tight text-left">
+                      <span className="text-[10px] text-white/60 tracking-[0.3em]">GPU</span>
+                      <span className="text-[11px]">
+                        {showGpuPrototype ? 'Prototype' : 'Disabled'}
+                      </span>
+                    </span>
+                  </button>
                 </div>
               </div>
             </div>
@@ -2092,7 +3116,7 @@ export default function CryptoPlanets() {
             )}
           </div>
 
-          <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 max-w-xs ml-48">
+          <div className="bg-black/50 backdrop-blur-md rounded-lg p-4 border border-white/10 max-w-xs ml-52">
             <div className="text-xs text-white/60 mb-2">Camera Controls</div>
             <div className="text-xs text-white/80 space-y-1">
               <div>🖱️ Drag to pan {(followingId || isTransitioning) && <span className="text-yellow-400">(cancels)</span>}</div>
@@ -2119,6 +3143,15 @@ export default function CryptoPlanets() {
               Zoom: {(camera.zoom * 100).toFixed(1)}%
             </div>
           </div>
+        </div>
+      )}
+
+      {showGpuPrototype && (
+        <div className="fixed bottom-6 left-6 z-40 pointer-events-none select-none" data-menu-ignore="true">
+          <div className="text-xs uppercase tracking-[0.3em] text-white/60 mb-1">GPU MODE</div>
+          <p className="text-[11px] text-white/50 max-w-xs">
+            Experimental deck.gl renderer is live. Toggle GPU to revert to the DOM renderer.
+          </p>
         </div>
       )}
 

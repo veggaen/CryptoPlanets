@@ -17,15 +17,15 @@ const CAMERA_CONFIG = {
     
     // Zoom limits - EXPANDED for full galaxy view
     minZoom: 0.003,               // Allow extreme zoom out to see entire galaxy
-    maxZoom: 3.0,                 // Allow close-up viewing of small moons
+    maxZoom: 100.0,               // Allow extreme close-up viewing of small moons
     
     // Orbit offset - adds slight offset to following position
     orbitViewOffset: 0,           // No offset = planet centered perfectly
     
     // Cinematic transition settings - SMOOTH ARC
-    cinematicDuration: 4200,      // Extended for gentler arcs
-    galaxyOverviewZoom: 0.012,    // Zoom level at apex of the arc
-    arcHeight: 0.5,               // Slightly flatter path for calmer feel
+    cinematicDuration: 2200,      // Faster transitions; less "cinematic" by default
+    galaxyOverviewZoom: 0.02,     // Don't zoom out as far at the apex
+    arcHeight: 0.3,               // Flatter path; less center-swoosh
 };
 
 export { CAMERA_CONFIG };
@@ -54,7 +54,44 @@ export type CameraTransition = {
     // Center (sun) for midpoint
     centerX: number;
     centerY: number;
+
+    // Adaptive cinematic profile (0 = direct, 1 = full arc)
+    arcStrength: number;
+    overviewZoom: number;
 };
+
+function clamp01(value: number): number {
+    return Math.max(0, Math.min(1, value));
+}
+
+function lerp(a: number, b: number, t: number): number {
+    return a + (b - a) * t;
+}
+
+function computeArcStrength(params: {
+    startCamX: number;
+    startCamY: number;
+    startZoom: number;
+    targetWorldX: number;
+    targetWorldY: number;
+    targetZoom: number;
+}): number {
+    const safeStartZoom = Math.max(params.startZoom, 1e-6);
+    const startWorldX = -params.startCamX / safeStartZoom;
+    const startWorldY = -params.startCamY / safeStartZoom;
+
+    const worldDistance = Math.hypot(params.targetWorldX - startWorldX, params.targetWorldY - startWorldY);
+    const zoomRatio = Math.max(params.startZoom, params.targetZoom) / Math.max(1e-6, Math.min(params.startZoom, params.targetZoom));
+
+    // Heuristics tuned for this app's scale:
+    // - Keep short hops mostly direct
+    // - Only trigger a real swoosh for large distance/zoom changes
+    const distanceFactor = clamp01((worldDistance - 350) / 1400);
+    const zoomFactor = clamp01((Math.log2(zoomRatio) - 1.0) / 2.5);
+
+    // Use the stronger of the two signals.
+    return Math.max(distanceFactor, zoomFactor);
+}
 
 /**
  * Create a new cinematic camera transition
@@ -70,12 +107,28 @@ export function createCinematicTransition(
     sunY: number = 0,
     duration: number = CAMERA_CONFIG.cinematicDuration
 ): CameraTransition {
+    const arcStrength = computeArcStrength({
+        startCamX: currentCamera.x,
+        startCamY: currentCamera.y,
+        startZoom: currentCamera.zoom,
+        targetWorldX: targetNodeX,
+        targetWorldY: targetNodeY,
+        targetZoom,
+    });
+
+    // If the move is small, keep the overview zoom close to the "ground" zooms.
+    const minGroundZoom = Math.min(currentCamera.zoom, targetZoom);
+    const overviewZoom = lerp(minGroundZoom, CAMERA_CONFIG.galaxyOverviewZoom, arcStrength);
+
+    // Also shorten duration for short moves so it feels responsive.
+    const resolvedDuration = Math.round(lerp(450, duration, arcStrength));
+
     return {
         active: true,
         phase: 'zoom-out',
         progress: 0,
         startTime: performance.now(),
-        duration,
+        duration: resolvedDuration,
         
         startX: currentCamera.x,
         startY: currentCamera.y,
@@ -88,6 +141,9 @@ export function createCinematicTransition(
         
         centerX: sunX,
         centerY: sunY,
+
+        arcStrength,
+        overviewZoom,
     };
 }
 
@@ -166,14 +222,14 @@ export function updateCinematicTransition(
     const groundZoom = transition.startZoom + (transition.targetZoom - transition.startZoom) * progress;
     
     // The overview zoom represents our "apex" - how high we go
-    const overviewZoom = CAMERA_CONFIG.galaxyOverviewZoom;
+    const overviewZoom = transition.overviewZoom;
     
     // Calculate how much we need to "lift" from ground to reach overview
     // Only lift if overview is smaller (more zoomed out) than ground
     const maxLift = Math.max(0, groundZoom - overviewZoom);
     
     // Apply the arc to zoom - we subtract because smaller zoom = more zoomed out = "higher"
-    const zoom = groundZoom - (maxLift * arcHeight * CAMERA_CONFIG.arcHeight);
+    const zoom = groundZoom - (maxLift * arcHeight * CAMERA_CONFIG.arcHeight * transition.arcStrength);
     
     // ========== SMOOTH CURVED POSITION ==========
     // Position follows a curved path, not straight line
@@ -195,7 +251,7 @@ export function updateCinematicTransition(
     const mt = 1 - t;
     
     // How much the path curves toward center (0 = straight line, 1 = full curve through center)
-    const curveFactor = CAMERA_CONFIG.arcHeight;
+    const curveFactor = CAMERA_CONFIG.arcHeight * transition.arcStrength;
     
     // Control point is pulled toward center based on curve factor
     const controlX = startCamX + (centerCamX - startCamX) * curveFactor + (endCamX - startCamX) * 0.5 * (1 - curveFactor);

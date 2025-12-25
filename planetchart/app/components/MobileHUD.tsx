@@ -1,12 +1,15 @@
 "use client";
 
-import { memo, useState, useCallback } from "react";
-import type { GalaxyNode, WeightMode } from "@/types/galaxy";
+import { memo, useMemo, useState, useCallback } from "react";
+import type { GalaxyData, GalaxyNode, WeightMode } from "@/types/galaxy";
 import type { QualityMode } from "@/types/performance";
+import type { PrimaryProvider } from "@/types/providers";
+import { PrimaryProviderSelect } from "@/components/PrimaryProviderSelect";
 
 interface MobileHUDProps {
   planets: GalaxyNode[];
   sun: GalaxyNode;
+  nodes: GalaxyNode[];
   followingId: string | null;
   onFollowPlanet: (nodeId: string | null) => void;
   zoom: number;
@@ -19,6 +22,9 @@ interface MobileHUDProps {
   followingInfo: { symbol: string; type: string } | null;
   qualityMode: QualityMode;
   qualityReasons: string[];
+  primaryProvider: PrimaryProvider;
+  onPrimaryProviderChange: (provider: PrimaryProvider) => void;
+  providerMeta?: GalaxyData['meta'];
 }
 
 /**
@@ -32,6 +38,7 @@ interface MobileHUDProps {
 const MobileHUD = memo(({
   planets,
   sun,
+  nodes,
   followingId,
   onFollowPlanet,
   zoom,
@@ -44,20 +51,83 @@ const MobileHUD = memo(({
   followingInfo,
   qualityMode,
   qualityReasons,
+  primaryProvider,
+  onPrimaryProviderChange,
+  providerMeta,
 }: MobileHUDProps) => {
   const [isOpen, setIsOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<'chains' | 'settings'>('chains');
+  const [searchQuery, setSearchQuery] = useState('');
 
   const allNodes = [sun, ...planets];
 
+  const searchResults = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [] as GalaxyNode[];
+
+    const scored: Array<{ node: GalaxyNode; score: number }> = [];
+
+    for (const node of nodes) {
+      const data = node.data as unknown as Record<string, unknown>;
+      const symbol = (('symbol' in node.data ? node.data.symbol : null) as string | null)
+        || (('name' in node.data ? node.data.name : null) as string | null)
+        || node.id;
+      const name = ('name' in node.data ? node.data.name : null) as string | null;
+      const address = (typeof data.address === 'string' ? data.address : null)
+        || (typeof data.contractAddress === 'string' ? data.contractAddress : null)
+        || (typeof data.tokenAddress === 'string' ? data.tokenAddress : null)
+        || null;
+      const tags = data.tags;
+
+      const parts: string[] = [node.id, symbol];
+      if (name) parts.push(name);
+      if (typeof address === 'string') parts.push(address);
+      if (Array.isArray(tags)) parts.push(...tags.filter((t) => typeof t === 'string'));
+      if (typeof tags === 'string') parts.push(tags);
+
+      const normalizedParts = parts
+        .filter(Boolean)
+        .map((p) => String(p).toLowerCase());
+
+      let bestScore = 0;
+      for (const p of normalizedParts) {
+        if (p === q) {
+          bestScore = Math.max(bestScore, 100);
+        } else if (p.startsWith(q)) {
+          bestScore = Math.max(bestScore, 70);
+        } else if (p.includes(q)) {
+          bestScore = Math.max(bestScore, 40);
+        }
+      }
+
+      if (bestScore > 0) {
+        // Prefer moons (tokens) slightly when searching by address.
+        const looksLikeAddress = q.startsWith('0x') || q.length >= 20;
+        if (looksLikeAddress && node.type === 'moon') bestScore += 5;
+        scored.push({ node, score: bestScore });
+      }
+    }
+
+    return scored
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 12)
+      .map((s) => s.node);
+  }, [nodes, searchQuery]);
+
   const handleClose = useCallback(() => {
     setIsOpen(false);
+    setSearchQuery('');
   }, []);
 
   const handleNodeClick = useCallback((nodeId: string, isFollowing: boolean) => {
     onFollowPlanet(isFollowing ? null : nodeId);
     // Don't close - let user see the result
   }, [onFollowPlanet]);
+
+  const handleSearchPick = useCallback((nodeId: string) => {
+    onFollowPlanet(nodeId);
+    handleClose();
+  }, [handleClose, onFollowPlanet]);
 
   return (
     <>
@@ -87,7 +157,7 @@ const MobileHUD = memo(({
       {/* Floating Action Button */}
       <button
         onClick={() => setIsOpen(true)}
-        className="fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full bg-gradient-to-br from-purple-600 to-indigo-700 border border-purple-400/30 shadow-2xl flex items-center justify-center fab-glow touch-target pointer-events-auto"
+        className="fixed bottom-6 right-6 z-50 w-14 h-14 rounded-full bg-linear-to-br from-purple-600 to-indigo-700 border border-purple-400/30 shadow-2xl flex items-center justify-center fab-glow touch-target pointer-events-auto"
         aria-label="Open navigation menu"
       >
         <svg className="w-7 h-7 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -138,69 +208,148 @@ const MobileHUD = memo(({
             {/* Content */}
             <div className="flex-1 overflow-y-auto p-4">
               {activeTab === 'chains' ? (
-                <div className="grid grid-cols-3 gap-3">
-                  {allNodes.map((node) => {
-                    const symbol = ('symbol' in node.data ? node.data.symbol : null)
-                      || ('name' in node.data ? node.data.name : null)
-                      || node.id.toUpperCase();
-                    
-                    const icon = ('icon' in node.data && typeof node.data.icon === 'string')
-                      ? node.data.icon
-                      : null;
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs text-white/50 mb-2 uppercase tracking-wide">
+                      Search
+                    </label>
+                    <input
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="Search chains or tokens…"
+                      className="w-full px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-white/80 placeholder:text-white/30 focus:outline-none focus:ring-2 focus:ring-cyan-500/30"
+                    />
+                  </div>
 
-                    const isFollowing = followingId === node.id;
-                    const isSun = node.type === 'sun';
-
-                    return (
-                      <button
-                        key={node.id}
-                        onClick={() => handleNodeClick(node.id, isFollowing)}
-                        className={`
-                          flex flex-col items-center gap-2 p-3 rounded-2xl
-                          transition-all duration-200 touch-target
-                          ${isFollowing 
-                            ? 'bg-gradient-to-br from-cyan-500/30 to-purple-500/30 border-cyan-400/50 shadow-lg' 
-                            : 'bg-white/5 border-white/10 active:bg-white/10'
-                          }
-                          border
-                        `}
-                      >
-                        {/* Icon */}
-                        <div className={`
-                          relative w-12 h-12 rounded-full overflow-hidden
-                          ${isSun ? 'bg-gradient-to-br from-yellow-400 to-orange-500' : 'bg-white/10'}
-                          ${isFollowing ? 'ring-2 ring-cyan-400/50' : ''}
-                        `}>
-                          {icon ? (
-                            <img 
-                              src={icon} 
-                              alt={symbol}
-                              className="w-full h-full object-cover"
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-sm font-bold text-white">
-                              {symbol.substring(0, 2)}
-                            </div>
-                          )}
-                          
-                          {isFollowing && (
-                            <div className="absolute inset-0 rounded-full animate-ping bg-cyan-400/30" />
-                          )}
+                  {searchQuery.trim() ? (
+                    <div className="space-y-2">
+                      {searchResults.length === 0 ? (
+                        <div className="text-sm text-white/40 px-1">
+                          No matches
                         </div>
+                      ) : (
+                        searchResults.map((node) => {
+                          const symbol = ('symbol' in node.data ? node.data.symbol : null)
+                            || ('name' in node.data ? node.data.name : null)
+                            || node.id.toUpperCase();
+                          const label = node.type === 'moon' ? 'Token' : node.type === 'planet' ? 'Chain' : 'Sun';
+                          const isFollowing = followingId === node.id;
 
-                        {/* Label */}
-                        <span className={`
-                          text-xs font-medium
-                          ${isFollowing ? 'text-cyan-300' : 'text-white/70'}
-                        `}>
-                          {symbol}
-                        </span>
-                      </button>
-                    );
-                  })}
+                          return (
+                            <button
+                              key={`search-${node.id}`}
+                              onClick={() => handleSearchPick(node.id)}
+                              className={`w-full flex items-center justify-between gap-3 px-4 py-3 rounded-xl border text-left transition-colors touch-target ${
+                                isFollowing
+                                  ? 'bg-cyan-500/20 border-cyan-400/30 text-cyan-200'
+                                  : 'bg-white/5 border-white/10 text-white/80 active:bg-white/10'
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="text-sm font-semibold truncate">{symbol}</div>
+                                <div className="text-[11px] uppercase tracking-wide text-white/40">{label}</div>
+                              </div>
+                              <div className="text-xs text-white/40">Go</div>
+                            </button>
+                          );
+                        })
+                      )}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-3 gap-3">
+                      {allNodes.map((node) => {
+                        const symbol = ('symbol' in node.data ? node.data.symbol : null)
+                          || ('name' in node.data ? node.data.name : null)
+                          || node.id.toUpperCase();
+                        
+                        const icon = ('icon' in node.data && typeof node.data.icon === 'string')
+                          ? node.data.icon
+                          : null;
+
+                        const isFollowing = followingId === node.id;
+                        const isSun = node.type === 'sun';
+
+                        return (
+                          <button
+                            key={node.id}
+                            onClick={() => handleNodeClick(node.id, isFollowing)}
+                            className={`
+                              flex flex-col items-center gap-2 p-3 rounded-2xl
+                              transition-all duration-200 touch-target
+                              ${isFollowing 
+                                ? 'bg-linear-to-br from-cyan-500/30 to-purple-500/30 border-cyan-400/50 shadow-lg' 
+                                : 'bg-white/5 border-white/10 active:bg-white/10'
+                              }
+                              border
+                            `}
+                          >
+                            {/* Icon */}
+                            <div className={`
+                              relative w-12 h-12 rounded-full overflow-hidden
+                              ${isSun ? 'bg-linear-to-br from-yellow-400 to-orange-500' : 'bg-white/10'}
+                              ${isFollowing ? 'ring-2 ring-cyan-400/50' : ''}
+                            `}>
+                              {icon ? (
+                                <img 
+                                  src={icon} 
+                                  alt={symbol}
+                                  className="w-full h-full object-cover"
+                                />
+                              ) : (
+                                <div className="w-full h-full flex items-center justify-center text-sm font-bold text-white">
+                                  {symbol.substring(0, 2)}
+                                </div>
+                              )}
+                              
+                              {isFollowing && (
+                                <div className="absolute inset-0 rounded-full animate-ping bg-cyan-400/30" />
+                              )}
+                            </div>
+
+                            {/* Label */}
+                            <span className={`
+                              text-xs font-medium
+                              ${isFollowing ? 'text-cyan-300' : 'text-white/70'}
+                            `}>
+                              {symbol}
+                            </span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="space-y-4">
+                  {/* Primary provider selector */}
+                  <div>
+                    <label className="block text-xs text-white/50 mb-2 uppercase tracking-wide">
+                      Primary Data Provider
+                    </label>
+                    <PrimaryProviderSelect
+                      value={primaryProvider}
+                      onChange={onPrimaryProviderChange}
+                      variant="mobile"
+                      title="Choose which provider to trust first when values conflict"
+                    />
+
+                    {providerMeta?.lockedPrimaryProvider === 'coinmarketcap' && primaryProvider === 'coinmarketcap' && (
+                      <div className="mt-3 rounded-2xl border border-red-500/20 bg-red-500/10 p-3">
+                        <div className="text-[10px] uppercase tracking-[0.3em] text-red-200/80 font-semibold">Locked</div>
+                        <div className="text-[11px] text-white/60 mt-1 leading-snug">
+                          CoinMarketCap is owner-only on this plan. Showing fallback data.
+                        </div>
+                        <div className="mt-2">
+                          <div className="h-2 rounded bg-red-500/20 blur-[1px]" />
+                          <div className="h-2 rounded bg-red-500/15 blur-[1px] mt-1 w-5/6" />
+                        </div>
+                      </div>
+                    )}
+                    <div className="text-[11px] text-white/40 mt-2">
+                      Uses your selected provider when values conflict; fills missing metrics from others.
+                    </div>
+                  </div>
+
                   {/* Weight Mode Selector */}
                   <div>
                     <label className="block text-xs text-white/50 mb-2 uppercase tracking-wide">
@@ -222,7 +371,7 @@ const MobileHUD = memo(({
                         >
                           {mode === 'MarketCap' ? '📊 Market Cap' :
                            mode === 'TVL' ? '🔒 TVL' :
-                           mode === 'Volume24h' ? '📈 24h Volume' :
+                           mode === 'Volume24h' ? '📈 24H DEX Vol' :
                            '📉 24h Change'}
                         </button>
                       ))}

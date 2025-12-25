@@ -49,8 +49,8 @@ export const physicsConfig = {
     boundsSoftness: 0.05,           // Very soft boundary push
 
     // ===== Object Limits =====
-    maxChains: 10,                  // Maximum number of chains to display
-    tokensPerChain: 20,             // Maximum tokens per chain
+    maxChains: 16,                  // Maximum number of chains to display
+    tokensPerChain: 24,             // Maximum tokens per chain
 
     // ===== Size Ranges (SQRT SCALING) - 9x SCALE =====
     // BTC sun radius 5400px => ETH (5x smaller cap) => radius = 5400/sqrt(5) = ~2415px

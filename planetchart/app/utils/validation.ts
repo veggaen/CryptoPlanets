@@ -23,6 +23,8 @@ export const tokenDataSchema = z.object({
     volume24h: z.number().nonnegative(),
     liquidity: z.number().nonnegative(),
     marketCap: z.number().nonnegative(),
+    fdv: z.number().nonnegative().optional(),
+    marketCapKind: z.enum(["market_cap", "fdv", "estimated", "unknown"]).optional(),
     color: z.string(),
     icon: z.string().optional(), // Token icon URL
 });

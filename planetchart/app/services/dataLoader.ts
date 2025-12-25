@@ -11,6 +11,9 @@
 import { GalaxyData, WeightMode, TokenData, ChainData } from "@/types/galaxy";
 import { debugLog } from "@/utils/debug";
 import { STABLECOIN_SYMBOLS, WRAPPED_PATTERNS } from "@/config/dataConfig";
+import type { PrimaryProvider } from "@/types/providers";
+
+export type VolumeSource = 'dex' | 'spot';
 
 // ===== CLIENT-SIDE CONFIGURATION =====
 const API_TIMEOUT_MS = 15_000;    // Timeout for API requests
@@ -27,8 +30,22 @@ interface CachedGalaxyData {
     data: GalaxyData;
     timestamp: number;
 }
-const dataCache: Map<WeightMode, CachedGalaxyData> = new Map();
+const dataCache: Map<string, CachedGalaxyData> = new Map();
 const CACHE_TTL_MS = 60_000; // 1 minute client-side cache
+
+function getCacheKey(weightMode: WeightMode, volumeSource?: VolumeSource): string {
+    // Back-compat helper (no provider dimension). Prefer the overload below.
+    if (weightMode !== 'Volume24h') return weightMode;
+    const normalized = volumeSource === 'spot' ? 'spot' : 'dex';
+    return `${weightMode}:${normalized}`;
+}
+
+function getCacheKeyWithProvider(weightMode: WeightMode, volumeSource: VolumeSource | undefined, primaryProvider: PrimaryProvider): string {
+    const provider = primaryProvider || 'auto';
+    if (weightMode !== 'Volume24h') return `${weightMode}:${provider}`;
+    const normalized = volumeSource === 'spot' ? 'spot' : 'dex';
+    return `${weightMode}:${normalized}:${provider}`;
+}
 
 // ===== TOKEN FILTER FUNCTIONS =====
 function isStablecoin(token: TokenData): boolean {
@@ -58,7 +75,8 @@ function filterChains(chains: ChainData[], hideStables: boolean, hideWrapped: bo
 // ===== MAIN DATA LOADER =====
 export async function loadGalaxyData(
     weightMode: WeightMode, 
-    filters: GalaxyFilterOptions = {}
+    filters: GalaxyFilterOptions = {},
+    options: { volumeSource?: VolumeSource; primaryProvider?: PrimaryProvider } = {}
 ): Promise<GalaxyData> {
     // Apply defaults
     const hideStables = filters.hideStables !== false;
@@ -68,7 +86,9 @@ export async function loadGalaxyData(
 
     try {
         // Check client-side cache first (for instant filter switching)
-        const cached = dataCache.get(weightMode);
+        const primaryProvider: PrimaryProvider = options.primaryProvider ?? 'auto';
+        const cacheKey = getCacheKeyWithProvider(weightMode, options.volumeSource, primaryProvider);
+        const cached = dataCache.get(cacheKey);
         const now = Date.now();
         
         let unfilteredData: GalaxyData;
@@ -78,10 +98,10 @@ export async function loadGalaxyData(
             unfilteredData = cached.data;
         } else {
             // Fetch UNFILTERED data from API (server will still filter but we also cache locally)
-            unfilteredData = await fetchFromAPI(weightMode, false, false);
+            unfilteredData = await fetchFromAPI(weightMode, false, false, options.volumeSource, primaryProvider);
             
             // Cache the unfiltered data for instant filter switching
-            dataCache.set(weightMode, { data: unfilteredData, timestamp: now });
+            dataCache.set(cacheKey, { data: unfilteredData, timestamp: now });
         }
         
         // Apply client-side filtering (instant, no network)
@@ -111,9 +131,9 @@ export async function prefetchAllModes(): Promise<void> {
     // Fetch in parallel but don't block
     await Promise.allSettled(
         modes.map(mode => 
-            fetchFromAPI(mode, false, false)
+            fetchFromAPI(mode, false, false, mode === 'Volume24h' ? 'dex' : undefined, 'auto')
                 .then(data => {
-                    dataCache.set(mode, { data, timestamp: Date.now() });
+                    dataCache.set(getCacheKeyWithProvider(mode, mode === 'Volume24h' ? 'dex' : undefined, 'auto'), { data, timestamp: Date.now() });
                     debugLog('data', `Prefetched ${mode} mode`);
                 })
                 .catch(err => {
@@ -127,15 +147,30 @@ export async function prefetchAllModes(): Promise<void> {
 async function fetchFromAPI(
     weightMode: WeightMode,
     hideStables: boolean,
-    hideWrapped: boolean
+    hideWrapped: boolean,
+    volumeSource?: VolumeSource,
+    primaryProvider: PrimaryProvider = 'auto'
 ): Promise<GalaxyData> {
-    // Determine the API URL (works both client and server side)
-    const baseUrl = typeof window !== 'undefined' 
-        ? '' // Client-side: relative URL
-        : (process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000'); // Server-side
-    
+    // Always use an absolute URL so Node/Undici fetch works (Vitest/JSDOM included).
+    const origin = (typeof window !== 'undefined' && typeof window.location?.origin === 'string')
+        ? window.location.origin
+        : (process.env.NEXT_PUBLIC_BASE_URL || 'http://localhost:3000');
+
     // Always fetch unfiltered data so we can filter client-side
-    const url = `${baseUrl}/api/galaxy?mode=${encodeURIComponent(weightMode)}&hideStables=false&hideWrapped=false`;
+    const params = new URLSearchParams({
+        mode: weightMode,
+        hideStables: 'false',
+        hideWrapped: 'false',
+    });
+
+    params.set('primaryProvider', primaryProvider);
+
+    if (weightMode === 'Volume24h' && (volumeSource === 'dex' || volumeSource === 'spot')) {
+        params.set('volumeSource', volumeSource);
+    }
+
+    const path = `/api/galaxy?${params.toString()}`;
+    const url = new URL(path, origin).toString();
     
     debugLog('data', `Fetching from internal API: ${url}`);
 

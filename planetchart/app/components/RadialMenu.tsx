@@ -8,6 +8,7 @@ interface RadialMenuItem {
   icon: React.ReactNode;
   onClick: () => void;
   color?: string;
+  closeOnClick?: boolean;
 }
 
 interface RadialMenuProps {
@@ -17,19 +18,25 @@ interface RadialMenuProps {
   items: RadialMenuItem[];
   onClose: () => void;
   title?: string;
+  centerContent?: React.ReactNode;
+  panelContent?: React.ReactNode;
 }
 
 /**
  * RadialMenu - Futuristic circular context menu
  * Opens on right-click with smooth animations
  */
-const RadialMenu = memo(({ isOpen, x, y, items, onClose, title }: RadialMenuProps) => {
+const RadialMenu = memo(({ isOpen, x, y, items, onClose, title, centerContent, panelContent }: RadialMenuProps) => {
   const [isAnimating, setIsAnimating] = useState(false);
 
   useEffect(() => {
-    if (isOpen) {
-      setIsAnimating(true);
-    }
+    let frame = 0;
+    frame = window.requestAnimationFrame(() => {
+      setIsAnimating(isOpen);
+    });
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+    };
   }, [isOpen]);
 
   // Close on escape key
@@ -46,21 +53,42 @@ const RadialMenu = memo(({ isOpen, x, y, items, onClose, title }: RadialMenuProp
   if (!isOpen) return null;
 
   const radius = 90; // Distance from center to menu items
-  const angleStep = (2 * Math.PI) / items.length;
+  const angleStep = items.length ? (2 * Math.PI) / items.length : 0;
   const startAngle = -Math.PI / 2; // Start from top
 
   return (
     <>
       {/* Backdrop */}
       <div 
-        className="fixed inset-0 z-[100]"
+        className="fixed inset-0 z-100"
         onClick={onClose}
         onContextMenu={(e) => { e.preventDefault(); onClose(); }}
       />
 
+      {/* Centered modal panel (stays centered on screen) */}
+      {panelContent && (
+        <div
+          className={`
+            fixed left-1/2 top-1/2 z-101
+            pointer-events-auto
+            w-[22rem] max-w-[min(92vw,22rem)]
+            rounded-2xl
+            bg-black/70 backdrop-blur-xl
+            border border-white/15
+            shadow-2xl shadow-black/60
+            overflow-hidden
+            transition-all duration-300
+            ${isAnimating ? 'opacity-100 scale-100' : 'opacity-0 scale-95'}
+          `}
+          style={{ transform: 'translate(-50%, -50%)' }}
+        >
+          {panelContent}
+        </div>
+      )}
+
       {/* Menu Container */}
       <div
-        className="fixed z-[101] pointer-events-none"
+        className="fixed z-101 pointer-events-none"
         style={{
           left: x,
           top: y,
@@ -71,7 +99,7 @@ const RadialMenu = memo(({ isOpen, x, y, items, onClose, title }: RadialMenuProp
         <div className={`
           absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2
           w-20 h-20 rounded-full
-          bg-gradient-to-br from-slate-900/95 to-slate-800/95
+          bg-linear-to-br from-slate-900/95 to-slate-800/95
           border border-white/20
           backdrop-blur-xl
           flex items-center justify-center
@@ -82,11 +110,17 @@ const RadialMenu = memo(({ isOpen, x, y, items, onClose, title }: RadialMenuProp
           {/* Inner glow ring */}
           <div className="absolute inset-2 rounded-full border border-cyan-500/30" />
           
-          {/* Title */}
-          {title && (
-            <span className="text-[10px] font-medium text-white/60 uppercase tracking-wider text-center px-2">
-              {title}
-            </span>
+          {/* Center content / Title */}
+          {centerContent ? (
+            <div className="w-full h-full flex items-center justify-center px-2">
+              {centerContent}
+            </div>
+          ) : (
+            title && (
+              <span className="text-[10px] font-medium text-white/60 uppercase tracking-wider text-center px-2">
+                {title}
+              </span>
+            )
           )}
 
           {/* Decorative pulse */}
@@ -102,12 +136,17 @@ const RadialMenu = memo(({ isOpen, x, y, items, onClose, title }: RadialMenuProp
           return (
             <button
               key={item.id}
-              onClick={() => { item.onClick(); onClose(); }}
+              onClick={() => {
+                item.onClick();
+                if (item.closeOnClick !== false) {
+                  onClose();
+                }
+              }}
               className={`
                 absolute pointer-events-auto
                 w-14 h-14 rounded-full
                 flex flex-col items-center justify-center gap-0.5
-                bg-gradient-to-br from-slate-800/95 to-slate-900/95
+                bg-linear-to-br from-slate-800/95 to-slate-900/95
                 border border-white/20
                 backdrop-blur-xl
                 shadow-lg shadow-black/30

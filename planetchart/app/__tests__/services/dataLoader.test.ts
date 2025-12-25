@@ -1,21 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { loadGalaxyData } from '@/services/dataLoader';
-import * as defiLlama from '../../services/defiLlama';
-import * as dexScreener from '../../services/dexScreener';
-import * as coinGecko from '../../services/coinGecko';
-
-// Mock dependencies
-// Mock dependencies
-vi.mock('../../services/defiLlama', () => ({
-    fetchChainsTVL: vi.fn(),
-}));
-vi.mock('../../services/dexScreener', () => ({
-    fetchTokensForChain: vi.fn(),
-}));
-// Use relative path to match dataLoader import
-vi.mock('../../services/coinGecko', () => ({
-    fetchBTCStats: vi.fn(),
-}));
 
 describe('DataLoader Service', () => {
     beforeEach(() => {
@@ -23,77 +7,121 @@ describe('DataLoader Service', () => {
     });
 
     it('should load and aggregate galaxy data', async () => {
-        // Mock return values
-        (coinGecko.fetchBTCStats as any).mockResolvedValue({
-            price: 50000,
-            change24h: 5,
-            dominance: 0, // Will be calc
-            marketCap: 1000000000000,
-            volume24h: 50000000000,
-        });
+        const nowIso = new Date().toISOString();
+        const mockApiResponse = {
+            success: true,
+            source: 'api',
+            data: {
+                btc: {
+                    price: 60000,
+                    change24h: 5,
+                    dominance: 50,
+                    marketCap: 1_000_000_000_000,
+                    volume24h: 50_000_000_000,
+                },
+                chains: [
+                    {
+                        id: 'ethereum',
+                        name: 'Ethereum',
+                        symbol: 'ETH',
+                        tvl: 50_000_000_000,
+                        weight: 0,
+                        tokens: [
+                            {
+                                symbol: 'UNI',
+                                name: 'Uniswap',
+                                address: '0x1f9840a85d5af5bf1d1762f925bdaddc4201f984',
+                                price: 10,
+                                change24h: 2.5,
+                                volume24h: 1_000_000,
+                                liquidity: 5_000_000,
+                                marketCap: 1_000_000_000,
+                                color: 'pink',
+                            },
+                        ],
+                        change24h: 2.5,
+                        volume24h: 1_000_000_000,
+                        dominance: 0,
+                        color: 'blue',
+                    },
+                    {
+                        id: 'solana',
+                        name: 'Solana',
+                        symbol: 'SOL',
+                        tvl: 10_000_000_000,
+                        weight: 0,
+                        tokens: [],
+                        change24h: 5.0,
+                        volume24h: 500_000_000,
+                        dominance: 0,
+                        color: 'green',
+                    },
+                ],
+                lastUpdated: nowIso,
+                totalMarketCap: 3_500_000_000_000,
+                metric: 'TVL',
+            },
+        };
 
-        (defiLlama.fetchChainsTVL as any).mockResolvedValue([
-            {
-                id: 'ethereum',
-                name: 'Ethereum',
-                symbol: 'ETH',
-                tvl: 50000000000,
-                weight: 0,
-                tokens: [],
-                change24h: 2.5,
-                volume24h: 1000000000,
-                dominance: 0,
-                color: 'blue'
-            },
-            {
-                id: 'solana',
-                name: 'Solana',
-                symbol: 'SOL',
-                tvl: 10000000000,
-                weight: 0,
-                tokens: [],
-                change24h: 5.0,
-                volume24h: 500000000,
-                dominance: 0,
-                color: 'green'
-            },
-        ]);
-
-        (dexScreener.fetchTokensForChain as any).mockResolvedValue([
-            {
-                symbol: 'UNI',
-                name: 'Uniswap',
-                address: '0x1f9840a85d5af5bf1d1762f925bdaddc4201f984',
-                price: 10,
-                change24h: 2.5,
-                volume24h: 1000000,
-                liquidity: 5000000,
-                marketCap: 1000000000,
-                color: 'pink'
-            },
-        ]);
+        vi.stubGlobal('fetch', vi.fn(async () => ({
+            ok: true,
+            json: async () => mockApiResponse,
+        })) as any);
 
         const data = await loadGalaxyData('TVL');
 
         expect(data).toBeDefined();
-        // Internal mock returns 60000, ignoring vi.mock due to USE_MOCK_COINGECKO flag
         expect(data.btc.price).toBe(60000);
         expect(data.chains).toHaveLength(2);
         expect(data.chains[0].tokens).toHaveLength(1);
 
-        // Check dominance calculation
-        // Total = 1T (BTC) + 50B (ETH) + 10B (SOL) = 1.06T
-        // BTC Dom = 1T / 1.06T ~= 94%
-        expect(data.btc.dominance).toBeGreaterThan(90);
+        // Dominance is computed server-side and returned through the API response.
+        expect(data.btc.dominance).toBe(50);
     });
 
     it('should handle partial failures', async () => {
-        (coinGecko.fetchBTCStats as any).mockRejectedValue(new Error('API Error'));
+        vi.stubGlobal('fetch', vi.fn(async () => {
+            throw new Error('API Error');
+        }) as any);
 
-        // Should return fallback data
-        const data = await loadGalaxyData('TVL');
+        // Use a different mode to avoid returning cached data from the previous test.
+        const data = await loadGalaxyData('Volume24h');
 
         expect(data).toBeDefined();
         expect(data.chains).toEqual([]); // Fallback has empty chains
+    });
+
+    it('should not include capBasis in MarketCap requests', async () => {
+        const nowIso = new Date().toISOString();
+        const mockApiResponse = {
+            success: true,
+            source: 'api',
+            data: {
+                btc: {
+                    price: 60000,
+                    change24h: 0,
+                    dominance: 50,
+                    marketCap: 1,
+                    volume24h: 1,
+                },
+                chains: [],
+                lastUpdated: nowIso,
+                totalMarketCap: 1,
+                metric: 'MarketCap',
+            },
+        };
+
+        const fetchSpy = vi.fn(async (input: any) => ({
+            ok: true,
+            json: async () => mockApiResponse,
+        }));
+        vi.stubGlobal('fetch', fetchSpy as any);
+
+        await loadGalaxyData('MarketCap');
+
+        expect(fetchSpy).toHaveBeenCalled();
+        const firstUrl = String(fetchSpy.mock.calls[0][0]);
+        expect(firstUrl).toContain('mode=MarketCap');
+        expect(firstUrl).not.toContain('capBasis=');
     });
 });

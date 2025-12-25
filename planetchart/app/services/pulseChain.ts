@@ -51,18 +51,20 @@ export async function fetchPulseChainStats(): Promise<PulseChainStats | null> {
 export async function getPulseChainData(): Promise<ChainData> {
     const stats = await fetchPulseChainStats();
 
-    // Estimated TVL or fetch from external source if possible
-    // For now, we'll use a placeholder or try to fetch PLS price to estimate value
-    const tvl = 500000000; // Placeholder ~$500M TVL (conservative estimate)
-
     return {
         id: PULSECHAIN_ID,
         name: "PulseChain",
         symbol: "PLS",
-        tvl: tvl,
-        weight: tvl,
-        volume24h: 10000000, // Placeholder
+        // NOTE: We intentionally do NOT guess TVL/volume here.
+        // DefiLlama provides authoritative chain TVL; DefiLlama DEX endpoints provide DEX volume.
+        // When those are unavailable, keep these as unknown instead of inventing numbers.
+        tvl: 0,
+        tvlKind: 'unknown',
+        weight: 0,
+        volume24h: 0,
+        volume24hKind: 'unknown',
         change24h: 0,
+        change24hKind: 'unknown',
         dominance: 0,
         color: "from-purple-500 to-pink-600", // PulseChain branding
         tokens: [], // Will be populated by DexScreener

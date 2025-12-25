@@ -6,7 +6,7 @@ export default function Footer() {
                 <div className="flex items-center gap-4 text-white/60">
                     <span>🌌 CryptoPlanets</span>
                     <span>
-                        Data by{' '}
+                        Data sources:{' '}
                         <a href="https://defillama.com" target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:text-blue-300">
                             DefiLlama
                         </a>
@@ -19,12 +19,21 @@ export default function Footer() {
                             DexScreener
                         </a>
                     </span>
-                    <span className="text-yellow-400/70">Free tier APIs</span>
+                    <span className="text-white/40 hidden sm:inline">Public endpoints</span>
                 </div>
 
                 {/* Donation */}
-                <div className="flex items-center gap-2 text-white/70">
-                    <span className="hidden sm:inline">Built by a poor dev 😅</span>
+                <div className="flex items-center gap-3 text-white/60">
+                    <a
+                        href="https://x.com/vetlethetweeter"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-white/60 hover:text-white/80 transition-colors"
+                        title="Follow / feedback"
+                    >
+                        <span className="hidden sm:inline">Feedback / updates</span>
+                        <span className="sm:hidden">@X</span>
+                    </a>
                     <button
                         onClick={() => {
                             navigator.clipboard.writeText('0x45Ce973C2363785a1FB3ca7a2714575432DD8C99');
@@ -37,11 +46,10 @@ export default function Footer() {
                                 }
                             }, 2000);
                         }}
-                        className="px-3 py-1 bg-gradient-to-r from-purple-500/20 to-pink-500/20 border border-purple-400/30 rounded-lg hover:from-purple-500/30 hover:to-pink-500/30 transition-all text-white/90 hover:text-white flex items-center gap-1.5"
-                        title="Copy ETH donation address"
+                        className="px-2 py-1 border border-white/10 rounded-lg hover:border-white/20 transition-colors text-white/40 hover:text-white/60"
+                        title="Copy tip address"
                     >
-                        <span className="text-sm">💜</span>
-                        <span className="font-mono text-[10px]">Donate ETH</span>
+                        <span className="font-mono text-[10px]">Tip</span>
                     </button>
                 </div>
             </div>

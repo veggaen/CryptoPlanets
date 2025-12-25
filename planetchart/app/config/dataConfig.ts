@@ -206,6 +206,11 @@ export const CHAIN_TOKENS: Record<string, string[]> = {
 // Tokens fetched from DexScreener (not on CoinGecko or need better data)
 // Format: { symbol, name, address (contract address) }
 export const DEXSCREENER_TOKENS: Record<string, { symbol: string, name: string, address: string }[]> = {
+    ethereum: [
+        // Provide DEX liquidity/TVL + contract-address search for key ETH tokens.
+        { symbol: "WISE", name: "Wise", address: "0x66a0f676479Cee1d7373f3DC2e2952778BfF5bd6" },
+        { symbol: "PEPE", name: "Pepe", address: "0x6982508145454Ce325dDbE47a25d4ec3d2311933" },
+    ],
     pulsechain: [
         // PulseChain native tokens not on CoinGecko
         { symbol: "TEDDY", name: "Teddy Bear", address: "0xd6c31bA0754C4383A41c0e9DF042C62b5e918f6d" },
@@ -395,11 +400,18 @@ export const dataConfig = {
         "Base": "base",
         "Fantom": "fantom",
         "Cronos": "cronos",
-        "Pulsechain": "pulse chain",
+        "PulseChain": "pulsechain",
+        "Pulsechain": "pulsechain",
+        // Additional DefiLlama chains (un-curated moons by default)
+        "Tron": "tron",
+        "Sui": "sui",
+        "TON": "ton",
+        "Near": "near",
+        "Starknet": "starknet",
     } as const,
 
     // ===== Data Limits =====
-    maxChains: 12,                           // Display up to 12 chains (planets)
+    maxChains: 16,                           // Display up to 16 chains (planets)
     tokensPerChain: 24,                     // Tokens (moons) per chain - matches ring system
     minTVLThreshold: 1000000,        // Min TVL to include chain ($1M)
     minTokenLiquidity: 50000,        // Min liquidity to include token ($50k)
