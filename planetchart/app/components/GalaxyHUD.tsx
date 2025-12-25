@@ -1,6 +1,6 @@
 "use client";
 
-import { memo, useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import type { GalaxyData } from "@/types/galaxy";
 import type { GalaxyNode } from "@/types/galaxy";
 import type { QualityMode } from "@/types/performance";
@@ -27,6 +27,10 @@ interface GalaxyHUDProps {
 const GalaxyHUD = memo(({ planets, sun, followingId, onFollowPlanet, zoom, qualityMode, qualityReasons, primaryProvider, onPrimaryProviderChange, providerMeta }: GalaxyHUDProps) => {
   // Get all navigable nodes (sun + planets)
   const allNodes = [sun, ...planets];
+
+  const [cmcLockedInfoPinned, setCmcLockedInfoPinned] = useState(false);
+  const [cmcLockedInfoHover, setCmcLockedInfoHover] = useState(false);
+  const showCmcLockedInfo = cmcLockedInfoPinned || cmcLockedInfoHover;
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -77,10 +81,52 @@ const GalaxyHUD = memo(({ planets, sun, followingId, onFollowPlanet, zoom, quali
 
           {providerMeta?.lockedPrimaryProvider === 'coinmarketcap' && primaryProvider === 'coinmarketcap' && (
             <div className="mt-2 rounded-xl border border-red-500/20 bg-red-500/10 p-2">
-              <div className="text-[10px] uppercase tracking-[0.3em] text-red-200/80 font-semibold">Locked</div>
+              <div className="flex items-start justify-between gap-2">
+                <div className="text-[10px] uppercase tracking-[0.3em] text-red-200/80 font-semibold">Locked</div>
+                <button
+                  type="button"
+                  className="inline-flex items-center justify-center w-6 h-6 -mr-1 -mt-1 rounded-md text-white/45 hover:text-white/70 hover:bg-white/5 focus:outline-none focus:ring-1 focus:ring-white/15"
+                  aria-label="Why CoinMarketCap is locked"
+                  aria-expanded={showCmcLockedInfo}
+                  onClick={() => setCmcLockedInfoPinned((v) => !v)}
+                  onMouseEnter={() => setCmcLockedInfoHover(true)}
+                  onMouseLeave={() => setCmcLockedInfoHover(false)}
+                  onFocus={() => setCmcLockedInfoHover(true)}
+                  onBlur={() => setCmcLockedInfoHover(false)}
+                >
+                  <svg viewBox="0 0 20 20" fill="currentColor" className="w-4 h-4">
+                    <path
+                      fillRule="evenodd"
+                      d="M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16ZM9 8a1 1 0 1 1 2 0v6a1 1 0 1 1-2 0V8Zm1-3.25a1.25 1.25 0 1 0 0 2.5 1.25 1.25 0 0 0 0-2.5Z"
+                      clipRule="evenodd"
+                    />
+                  </svg>
+                </button>
+              </div>
+
               <div className="text-[11px] text-white/60 mt-1 leading-snug">
                 CoinMarketCap is owner-only. Showing fallback data.
               </div>
+
+              {showCmcLockedInfo && (
+                <div
+                  className="mt-2 rounded-lg border border-white/10 bg-black/30 p-2"
+                  onMouseEnter={() => setCmcLockedInfoHover(true)}
+                  onMouseLeave={() => setCmcLockedInfoHover(false)}
+                >
+                  <div className="text-[10px] uppercase tracking-[0.3em] text-white/40 font-semibold">
+                    Cost note
+                  </div>
+                  <div className="mt-1 text-[11px] text-white/70 leading-snug">
+                    CoinMarketCap API access is paid. Enabling public access can cost the owner roughly <span className="text-white/85 font-medium">$948–$3,588/year</span>
+                    <span className="text-white/60"> (plan-dependent)</span> plus maintenance.
+                  </div>
+                  <div className="mt-1 text-[11px] text-white/60 leading-snug">
+                    This is just one provider—infra and other APIs add more. Tips help keep features online.
+                  </div>
+                </div>
+              )}
+
               <div className="mt-1">
                 <div className="h-2 rounded bg-red-500/20 blur-[1px]" />
                 <div className="h-2 rounded bg-red-500/15 blur-[1px] mt-1 w-5/6" />

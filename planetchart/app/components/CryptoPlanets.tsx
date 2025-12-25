@@ -213,6 +213,7 @@ type SearchSuggestion = {
   primary: string;
   secondary: string | null;
   address: string | null;
+  icon: string | null;
   terms: string[];
   chainId: string | null;
   chainSymbol: string | null;
@@ -319,6 +320,7 @@ function toSearchSuggestion(node: GalaxyNode): SearchSuggestion {
   const data = node.data as Record<string, unknown>;
   const symbol = typeof data.symbol === "string" && data.symbol.trim().length ? data.symbol.trim() : null;
   const name = typeof data.name === "string" && data.name.trim().length ? data.name.trim() : null;
+  const icon = typeof data.icon === "string" && data.icon.trim().length ? data.icon.trim() : null;
   const contractRaw = typeof data.contractAddress === "string" && data.contractAddress.trim().length ? data.contractAddress.trim() : null;
   const legacyAddressRaw = typeof data.address === "string" && data.address.trim().length ? data.address.trim() : null;
   const candidate = contractRaw ?? legacyAddressRaw;
@@ -363,6 +365,7 @@ function toSearchSuggestion(node: GalaxyNode): SearchSuggestion {
     primary,
     secondary,
     address,
+    icon,
     terms,
     chainId,
     chainSymbol,
@@ -397,6 +400,51 @@ function FloatingSearch({
   const [query, setQuery] = useState("");
   const [isOpen, setIsOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [copiedAddress, setCopiedAddress] = useState<string | null>(null);
+  const copiedAddressTimeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (copiedAddressTimeoutRef.current) {
+        window.clearTimeout(copiedAddressTimeoutRef.current);
+        copiedAddressTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  const handleCopyAddress = useCallback((event: React.MouseEvent | React.KeyboardEvent, address: string) => {
+    event.preventDefault();
+    event.stopPropagation();
+
+    const acknowledge = () => {
+      setCopiedAddress(address);
+      if (copiedAddressTimeoutRef.current) {
+        window.clearTimeout(copiedAddressTimeoutRef.current);
+      }
+      copiedAddressTimeoutRef.current = window.setTimeout(() => setCopiedAddress(null), 1200);
+    };
+
+    if (typeof navigator !== 'undefined' && navigator.clipboard) {
+      navigator.clipboard.writeText(address).then(acknowledge).catch(() => acknowledge());
+      return;
+    }
+
+    try {
+      const el = document.createElement('textarea');
+      el.value = address;
+      el.setAttribute('readonly', '');
+      el.style.position = 'fixed';
+      el.style.opacity = '0';
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand('copy');
+      document.body.removeChild(el);
+    } catch {
+      // ignore
+    }
+
+    acknowledge();
+  }, []);
 
   const suggestions = useMemo(() => {
     const normalized = normalizeSearchQuery(query);
@@ -513,6 +561,11 @@ function FloatingSearch({
       className="fixed top-5 left-1/2 -translate-x-1/2 z-50 w-[min(560px,92vw)] pointer-events-auto"
     >
       <div className="relative">
+        <div className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-white/40">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35m1.85-5.15a7 7 0 11-14 0 7 7 0 0114 0z" />
+          </svg>
+        </div>
         <input
           ref={inputRef}
           value={query}
@@ -525,7 +578,7 @@ function FloatingSearch({
           onFocus={() => setIsOpen(Boolean(normalizeSearchQuery(query)))}
           onKeyDown={handleKeyDown}
           placeholder="Search chains or tokens…"
-          className="w-full bg-black/60 backdrop-blur-md border border-white/10 text-white px-4 py-2.5 rounded-full text-sm font-semibold shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40"
+          className="w-full bg-black/60 backdrop-blur-md border border-white/10 text-white pl-10 pr-4 py-3 rounded-2xl text-sm font-semibold shadow-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500/40"
           spellCheck={false}
           autoComplete="off"
           autoCorrect="off"
@@ -544,11 +597,74 @@ function FloatingSearch({
               const hasVol = typeof suggestion.volume24hUsd === 'number' && suggestion.volume24hUsd > 0;
               const hasChange = typeof suggestion.change24hPct === 'number' && Number.isFinite(suggestion.change24hPct);
 
-              const metaParts: string[] = [];
-              if (suggestion.address) metaParts.push(shortAddress(suggestion.address));
-              if (hasLiquidity) metaParts.push(`Liq ${formatCompactUSD(suggestion.liquidityUsd!)}`);
-              if (hasVol) metaParts.push(`Vol ${formatCompactUSD(suggestion.volume24hUsd!)}`);
-              if (hasChange) metaParts.push(`24h ${formatPercentChange(suggestion.change24hPct!)}`);
+              const metaChips: Array<{
+                key: string;
+                text: string;
+                tone: 'neutral' | 'pos' | 'neg';
+                icon: React.ReactNode;
+              }> = [];
+
+              if (suggestion.address) {
+                metaChips.push({
+                  key: 'addr',
+                  text: shortAddress(suggestion.address),
+                  tone: 'neutral',
+                  icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16 8V6a2 2 0 00-2-2H6a2 2 0 00-2 2v8a2 2 0 002 2h2" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M10 10h8a2 2 0 012 2v8a2 2 0 01-2 2h-8a2 2 0 01-2-2v-8a2 2 0 012-2z" />
+                    </svg>
+                  ),
+                });
+              }
+
+              if (hasLiquidity) {
+                metaChips.push({
+                  key: 'liq',
+                  text: `Liq ${formatCompactUSD(suggestion.liquidityUsd!)}`,
+                  tone: 'neutral',
+                  icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 2s6 6.5 6 11a6 6 0 11-12 0c0-4.5 6-11 6-11z" />
+                    </svg>
+                  ),
+                });
+              }
+
+              if (hasVol) {
+                metaChips.push({
+                  key: 'vol',
+                  text: `Vol ${formatCompactUSD(suggestion.volume24hUsd!)}`,
+                  tone: 'neutral',
+                  icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 19V5" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M10 19V9" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M16 19V13" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M22 19V7" />
+                    </svg>
+                  ),
+                });
+              }
+
+              if (hasChange) {
+                const v = suggestion.change24hPct as number;
+                const tone: 'neutral' | 'pos' | 'neg' = v > 0 ? 'pos' : v < 0 ? 'neg' : 'neutral';
+                metaChips.push({
+                  key: 'chg',
+                  text: `24h ${formatPercentChange(v)}`,
+                  tone,
+                  icon: (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-3.5 w-3.5">
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 14l6-6 4 4 6-6" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M20 8v6h-6" />
+                    </svg>
+                  ),
+                });
+              }
+
+              const fallbackLetters = String(suggestion.primary || '?').slice(0, 2).toUpperCase();
+              const kindLabel = labelKind(suggestion.kind);
 
               return (
                 <button
@@ -557,13 +673,17 @@ function FloatingSearch({
                   onMouseEnter={() => setActiveIndex(idx)}
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={() => commitSelection(suggestion)}
-                  className={`w-full text-left px-4 py-2.5 flex items-center gap-3 transition-colors ${
-                    isActive ? "bg-white/10" : "bg-transparent"
+                  className={`w-full text-left px-3.5 py-2.5 flex items-center gap-3 transition-colors ${
+                    isActive ? "bg-white/10" : "bg-transparent hover:bg-white/5"
                   }`}
                 >
-                  <span className="text-[11px] font-bold tracking-[0.25em] text-white/50 w-[70px]">
-                    {labelKind(suggestion.kind)}
-                  </span>
+                  <div className={`w-9 h-9 rounded-full overflow-hidden border border-white/10 bg-white/5 flex items-center justify-center shrink-0 ${isActive ? 'ring-2 ring-cyan-400/25' : ''}`}>
+                    {suggestion.icon ? (
+                      <img src={suggestion.icon} alt="" className="w-full h-full object-cover" />
+                    ) : (
+                      <span className="text-[11px] font-bold text-white/70">{fallbackLetters}</span>
+                    )}
+                  </div>
                   <span className="flex-1 min-w-0">
                     <span className="block text-sm font-semibold text-white truncate">
                       {suggestion.primary}
@@ -573,11 +693,73 @@ function FloatingSearch({
                         </span>
                       )}
                     </span>
-                    {metaParts.length > 0 ? (
-                      <span className="block text-[12px] text-white/55 truncate">{metaParts.join(' • ')}</span>
+                    {metaChips.length > 0 ? (
+                      <span className="mt-1 flex flex-wrap gap-1">
+                        {metaChips.slice(0, 4).map((chip) => {
+                          const toneClass =
+                            chip.tone === 'pos'
+                              ? 'bg-emerald-500/10 border-emerald-400/20 text-emerald-200'
+                              : chip.tone === 'neg'
+                                ? 'bg-red-500/10 border-red-400/20 text-red-200'
+                                : 'bg-white/5 border-white/10 text-white/55';
+
+                          const isAddressChip = chip.key === 'addr' && Boolean(suggestion.address);
+                          const addressRaw = suggestion.address ?? '';
+                          const addressCopied = isAddressChip && copiedAddress === addressRaw;
+
+                          return (
+                            <span
+                              key={chip.key}
+                              role={isAddressChip ? 'button' : undefined}
+                              tabIndex={isAddressChip ? 0 : undefined}
+                              onMouseDown={
+                                isAddressChip
+                                  ? (e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                    }
+                                  : undefined
+                              }
+                              onClick={
+                                isAddressChip
+                                  ? (e) => handleCopyAddress(e, addressRaw)
+                                  : undefined
+                              }
+                              onKeyDown={
+                                isAddressChip
+                                  ? (e) => {
+                                      if (e.key === 'Enter' || e.key === ' ') {
+                                        handleCopyAddress(e, addressRaw);
+                                      }
+                                    }
+                                  : undefined
+                              }
+                              title={isAddressChip ? (addressCopied ? 'Copied' : 'Copy address') : undefined}
+                              className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[11px] font-semibold ${toneClass}`}
+                            >
+                              <span className="text-current/70">{chip.icon}</span>
+                              <span className={isAddressChip ? 'truncate underline decoration-white/15 underline-offset-2' : 'truncate'}>
+                                {addressCopied ? 'Copied' : chip.text}
+                              </span>
+                            </span>
+                          );
+                        })}
+                      </span>
                     ) : suggestion.secondary ? (
                       <span className="block text-[12px] text-white/55 truncate">{suggestion.secondary}</span>
                     ) : null}
+                  </span>
+
+                  {isActive && (
+                    <span className="shrink-0 text-[10px] font-bold tracking-[0.22em] text-white/35 border border-white/10 bg-white/5 px-2 py-1 rounded-lg">
+                      ↵
+                    </span>
+                  )}
+
+                  <span className={`shrink-0 px-2 py-1 rounded-lg text-[10px] font-bold tracking-[0.22em] border ${
+                    isActive ? 'bg-cyan-500/10 border-cyan-400/20 text-cyan-200/80' : 'bg-white/5 border-white/10 text-white/45'
+                  }`}>
+                    {kindLabel}
                   </span>
                 </button>
               );
