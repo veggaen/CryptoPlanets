@@ -109,7 +109,7 @@ interface FilterOptions {
     hideWrapped: boolean;
 }
 
-type VolumeSource = 'dex' | 'spot';
+type VolumeSource = 'dex' | 'spot' | 'both';
 
 // ===== CORE DATA FETCHING (calls external APIs) =====
 async function fetchGalaxyDataFromAPIs(weightMode: WeightMode, filters: FilterOptions, volumeSource: VolumeSource, primaryProvider: PrimaryProvider): Promise<GalaxyData> {
@@ -142,8 +142,8 @@ async function fetchGalaxyDataFromAPIs(weightMode: WeightMode, filters: FilterOp
         }
     };
 
-    const isDexVolume = weightMode === 'Volume24h' && volumeSource === 'dex';
-    const isSpotVolume = weightMode === 'Volume24h' && volumeSource === 'spot';
+    const includeDexVolume = weightMode === 'Volume24h' && (volumeSource === 'dex' || volumeSource === 'both');
+    const includeSpotVolume = weightMode === 'Volume24h' && (volumeSource === 'spot' || volumeSource === 'both');
 
     const cgPlatformKeysByChainId: Record<string, string[]> = {
         ethereum: ['ethereum'],
@@ -302,7 +302,7 @@ async function fetchGalaxyDataFromAPIs(weightMode: WeightMode, filters: FilterOp
                     chain.change24hKind = 'price';
                 }
 
-                if (isSpotVolume && typeof snap.volume24h === 'number' && snap.volume24h >= 0) {
+                if (includeSpotVolume && typeof snap.volume24h === 'number' && snap.volume24h >= 0) {
                     chain.volume24h = snap.volume24h;
                     chain.volume24hKind = 'asset';
                 }
@@ -357,7 +357,7 @@ async function fetchGalaxyDataFromAPIs(weightMode: WeightMode, filters: FilterOp
         : computedSubsetTotal;
 
     // DEX total volume (24h) used for Volume24h mode (DEX).
-    const dexTotal24h = isDexVolume ? await fetchDexTotal24h() : null;
+    const dexTotal24h = includeDexVolume ? await fetchDexTotal24h() : null;
 
     // Fetch HEX data from DexScreener (CoinGecko has broken market cap data for HEX)
     const hexData = await fetchHEXData();
@@ -608,16 +608,28 @@ async function fetchGalaxyDataFromAPIs(weightMode: WeightMode, filters: FilterOp
         // Fill per-chain volume (24h) only when Volume24h is active.
         // - DEX source: DefiLlama chain DEX volume
         // - Spot source: CoinGecko total_volume for the chain's native token
-        const dexVol = isDexVolume ? await fetchDexChainVolume24h(chain.name) : null;
+        const dexVol = includeDexVolume ? await fetchDexChainVolume24h(chain.name) : null;
+        const spotVol = includeSpotVolume && chain.volume24hKind === 'asset' && typeof chain.volume24h === 'number' && chain.volume24h >= 0
+            ? chain.volume24h
+            : null;
+
+        const combinedVol = (typeof dexVol === 'number' ? dexVol : 0) + (typeof spotVol === 'number' ? spotVol : 0);
+
         const nextChain: ChainData = {
             ...chain,
-            volume24h: isDexVolume
-                ? (typeof dexVol === 'number' ? dexVol : chain.volume24h)
+            volume24h: weightMode === 'Volume24h'
+                ? (volumeSource === 'both'
+                    ? combinedVol
+                    : (volumeSource === 'dex'
+                        ? (typeof dexVol === 'number' ? dexVol : chain.volume24h)
+                        : chain.volume24h))
                 : chain.volume24h,
             volume24hKind: weightMode === 'Volume24h'
-                ? (isDexVolume
-                    ? (typeof dexVol === 'number' ? 'dex' : 'unknown')
-                    : (isSpotVolume ? (chain.volume24hKind === 'asset' ? 'asset' : 'unknown') : 'unknown'))
+                ? (volumeSource === 'both'
+                    ? ((typeof dexVol === 'number' || typeof spotVol === 'number') ? 'both' : 'unknown')
+                    : (volumeSource === 'dex'
+                        ? (typeof dexVol === 'number' ? 'dex' : 'unknown')
+                        : (includeSpotVolume ? (chain.volume24hKind === 'asset' ? 'asset' : 'unknown') : 'unknown')))
                 : undefined,
             tokens,
         };
@@ -697,10 +709,14 @@ async function fetchGalaxyDataFromAPIs(weightMode: WeightMode, filters: FilterOp
     // In Volume24h mode:
     // - DEX source uses DefiLlama DEX totals (dex_total)
     // - Spot source uses CoinGecko BTC total_volume (asset)
-    const volume24hKind: BTCData['volume24hKind'] = isDexVolume ? 'dex_total' : 'asset';
+    const volume24hKind: BTCData['volume24hKind'] = volumeSource === 'both'
+        ? 'both'
+        : (includeDexVolume ? 'dex_total' : 'asset');
     const btcForResponse: BTCData = {
         ...btcData,
-        volume24h: isDexVolume && typeof dexTotal24h === 'number' ? dexTotal24h : btcData.volume24h,
+        volume24h: volumeSource === 'both'
+            ? ((typeof dexTotal24h === 'number' ? dexTotal24h : 0) + (typeof btcData.volume24h === 'number' ? btcData.volume24h : 0))
+            : (includeDexVolume && typeof dexTotal24h === 'number' ? dexTotal24h : btcData.volume24h),
         volume24hKind,
     };
 
@@ -740,7 +756,9 @@ export async function GET(request: NextRequest) {
     const primaryProviderUsed: PrimaryProvider = coinMarketCapLocked ? 'coingecko' : primaryProviderRequested;
 
     const volumeSourceRaw = searchParams.get('volumeSource');
-    const volumeSource: VolumeSource = volumeSourceRaw === 'spot' ? 'spot' : 'dex';
+    const volumeSource: VolumeSource = volumeSourceRaw === 'spot'
+        ? 'spot'
+        : (volumeSourceRaw === 'both' ? 'both' : 'dex');
     
     // Filter params (default: hide stablecoins and wrapped tokens)
     const hideStables = searchParams.get('hideStables') !== 'false';

@@ -13,7 +13,7 @@ import { debugLog } from "@/utils/debug";
 import { STABLECOIN_SYMBOLS, WRAPPED_PATTERNS } from "@/config/dataConfig";
 import type { PrimaryProvider } from "@/types/providers";
 
-export type VolumeSource = 'dex' | 'spot';
+export type VolumeSource = 'dex' | 'spot' | 'both';
 
 // ===== CLIENT-SIDE CONFIGURATION =====
 const API_TIMEOUT_MS = 15_000;    // Timeout for API requests
@@ -36,14 +36,14 @@ const CACHE_TTL_MS = 60_000; // 1 minute client-side cache
 function getCacheKey(weightMode: WeightMode, volumeSource?: VolumeSource): string {
     // Back-compat helper (no provider dimension). Prefer the overload below.
     if (weightMode !== 'Volume24h') return weightMode;
-    const normalized = volumeSource === 'spot' ? 'spot' : 'dex';
+    const normalized = volumeSource === 'spot' ? 'spot' : volumeSource === 'both' ? 'both' : 'dex';
     return `${weightMode}:${normalized}`;
 }
 
 function getCacheKeyWithProvider(weightMode: WeightMode, volumeSource: VolumeSource | undefined, primaryProvider: PrimaryProvider): string {
     const provider = primaryProvider || 'auto';
     if (weightMode !== 'Volume24h') return `${weightMode}:${provider}`;
-    const normalized = volumeSource === 'spot' ? 'spot' : 'dex';
+    const normalized = volumeSource === 'spot' ? 'spot' : volumeSource === 'both' ? 'both' : 'dex';
     return `${weightMode}:${normalized}:${provider}`;
 }
 
@@ -165,7 +165,7 @@ async function fetchFromAPI(
 
     params.set('primaryProvider', primaryProvider);
 
-    if (weightMode === 'Volume24h' && (volumeSource === 'dex' || volumeSource === 'spot')) {
+    if (weightMode === 'Volume24h' && (volumeSource === 'dex' || volumeSource === 'spot' || volumeSource === 'both')) {
         params.set('volumeSource', volumeSource);
     }
 

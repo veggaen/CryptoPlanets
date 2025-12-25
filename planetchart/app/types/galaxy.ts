@@ -49,7 +49,7 @@ export type ChainData = {
     change24h: number;        // 24h TVL or price change %
     change24hKind?: "price" | "unknown";
     volume24h: number;        // 24h volume in USD
-    volume24hKind?: "dex" | "asset" | "unknown";
+    volume24hKind?: "dex" | "asset" | "both" | "unknown";
     dominance: number;        // % of total crypto market
     color: string;            // Visual theme color
     tokens: TokenData[];      // Top tokens on this chain
@@ -64,7 +64,7 @@ export type BTCData = {
     dominance: number;        // BTC dominance % of total market
     marketCap: number;        // BTC market cap in USD
     volume24h: number;        // 24h trading volume
-    volume24hKind?: "asset" | "dex_total";
+    volume24hKind?: "asset" | "dex_total" | "both";
     icon?: string;            // Icon URL from CoinGecko
 };
 

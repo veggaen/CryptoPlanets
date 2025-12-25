@@ -1863,7 +1863,7 @@ export default function CryptoPlanets() {
       setWeightMode(metricParam as WeightMode);
     }
 
-    if (volumeSourceParam === 'spot' || volumeSourceParam === 'dex') {
+    if (volumeSourceParam === 'spot' || volumeSourceParam === 'dex' || volumeSourceParam === 'both') {
       setVolumeSource(volumeSourceParam);
     }
   }, [searchParams]);
@@ -3207,6 +3207,24 @@ export default function CryptoPlanets() {
                         title="DEX volume (DefiLlama)"
                       >
                         DEX
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setVolumeSource('both');
+                          const url = new URL(window.location.href);
+                          url.searchParams.set('volumeSource', 'both');
+                          window.history.replaceState({}, '', url.toString());
+                        }}
+                        aria-pressed={volumeSource === 'both'}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                          volumeSource === 'both'
+                            ? 'bg-white/10 text-white border border-white/20'
+                            : 'text-white/60 hover:text-white hover:bg-white/5'
+                        }`}
+                        title="Combined DEX + CEX volume"
+                      >
+                        BOTH
                       </button>
                       <button
                         type="button"
