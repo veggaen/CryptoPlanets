@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { motion } from "framer-motion";
 import type { QualityMode } from "@/types/performance";
 
 type Star = {
@@ -96,8 +95,8 @@ export default function Starfield({ qualityMode }: { qualityMode: QualityMode })
     return (
       <div className="absolute inset-0 overflow-hidden pointer-events-none">
         {/* Nebula gradient overlays - these are deterministic */}
-        <div className="absolute inset-0 bg-gradient-to-br from-purple-900/10 via-transparent to-blue-900/10 animate-pulse" style={{ animationDuration: "8s" }} />
-        <div className="absolute inset-0 bg-gradient-to-tl from-pink-900/10 via-transparent to-transparent animate-pulse" style={{ animationDuration: "12s", animationDelay: "2s" }} />
+        <div className="absolute inset-0 bg-linear-to-br from-purple-900/10 via-transparent to-blue-900/10 animate-pulse" style={{ animationDuration: "8s" }} />
+        <div className="absolute inset-0 bg-linear-to-tl from-pink-900/10 via-transparent to-transparent animate-pulse" style={{ animationDuration: "12s", animationDelay: "2s" }} />
       </div>
     );
   }
@@ -105,26 +104,30 @@ export default function Starfield({ qualityMode }: { qualityMode: QualityMode })
   return (
     <div className="absolute inset-0 overflow-hidden pointer-events-none">
       {/* Nebula gradient overlays */}
-      <div className="absolute inset-0 bg-gradient-to-br from-purple-900/10 via-transparent to-blue-900/10 animate-pulse" style={{ animationDuration: "8s" }} />
-      <div className="absolute inset-0 bg-gradient-to-tl from-pink-900/10 via-transparent to-transparent animate-pulse" style={{ animationDuration: "12s", animationDelay: "2s" }} />
+      <div className="absolute inset-0 bg-linear-to-br from-purple-900/10 via-transparent to-blue-900/10 animate-pulse" style={{ animationDuration: "8s" }} />
+      <div className="absolute inset-0 bg-linear-to-tl from-pink-900/10 via-transparent to-transparent animate-pulse" style={{ animationDuration: "12s", animationDelay: "2s" }} />
 
       {/* Star layers with parallax */}
       {starLayers.map(({ stars, layer }) => (
-        <motion.div
+        <div
           key={layer}
           className="absolute inset-0"
-          animate={{
-            x: layer === "far" ? [0, -10, 0] : layer === "mid" ? [0, -20, 0] : [0, -30, 0],
-            y: layer === "far" ? [0, -5, 0] : layer === "mid" ? [0, -10, 0] : [0, -15, 0],
-          }}
-          transition={{
-            duration: layer === "far" ? 60 : layer === "mid" ? 40 : 30,
-            repeat: Infinity,
-            ease: "linear",
+          style={{
+            animationName:
+              layer === "far"
+                ? "planetchart-starfield-drift-far"
+                : layer === "mid"
+                  ? "planetchart-starfield-drift-mid"
+                  : "planetchart-starfield-drift-near",
+            animationDuration: layer === "far" ? "60s" : layer === "mid" ? "40s" : "30s",
+            animationIterationCount: "infinite",
+            animationTimingFunction: "linear",
+            willChange: "transform",
+            transform: "translate3d(0,0,0)",
           }}
         >
           {stars.map((star) => (
-            <motion.div
+            <div
               key={star.id}
               className="absolute rounded-full bg-white"
               style={{
@@ -134,55 +137,53 @@ export default function Starfield({ qualityMode }: { qualityMode: QualityMode })
                 height: star.size,
                 opacity: star.opacity,
                 boxShadow: `0 0 ${star.size * 2}px rgba(255, 255, 255, ${star.opacity * 0.5})`,
-              }}
-              animate={{
-                opacity: [star.opacity, star.opacity * 0.5, star.opacity],
-                scale: [1, 1.2, 1],
-              }}
-              transition={{
-                duration: star.animationDuration,
-                repeat: Infinity,
-                ease: "easeInOut",
+                animationName: "planetchart-starfield-twinkle",
+                animationDuration: `${star.animationDuration}s`,
+                animationIterationCount: "infinite",
+                animationTimingFunction: "ease-in-out",
+                animationDelay: `${(parseInt(star.id.split('-')[1] ?? '0', 10) % 10) * 0.17}s`,
+                willChange: "transform, opacity",
               }}
             />
           ))}
-        </motion.div>
+        </div>
       ))}
 
       {/* Shooting stars */}
       {shootingStars.map((shootingStar, idx) => (
-        <motion.div
+        (() => {
+          const dy = 150 * Math.tan((shootingStar.angle * Math.PI) / 180);
+          return (
+        <div
           key={shootingStar.id}
           className="absolute w-1 h-1 bg-white rounded-full"
           style={{
             left: `${shootingStar.startX}%`,
             top: `${shootingStar.startY}%`,
             boxShadow: "0 0 4px 2px rgba(255, 255, 255, 0.8)",
-          }}
-          initial={{ opacity: 0, x: 0, y: 0 }}
-          animate={{
-            opacity: [0, 1, 1, 0],
-            x: [0, 150],
-            y: [0, 150 * Math.tan((shootingStar.angle * Math.PI) / 180)],
-          }}
-          transition={{
-            duration: 2,
-            delay: idx * 8 + 5,
-            repeat: Infinity,
-            repeatDelay: 15,
-            ease: "easeOut",
+            animationName: "planetchart-starfield-shooting",
+            animationDuration: "22s",
+            animationDelay: `${idx * 8 + 5}s`,
+            animationIterationCount: "infinite",
+            animationTimingFunction: "linear",
+            willChange: "transform, opacity",
+            transform: "translate3d(0,0,0)",
+            ['--shoot-dx' as any]: "150px",
+            ['--shoot-dy' as any]: `${dy}px`,
           }}
         >
           {/* Tail effect */}
           <div
-            className="absolute top-0 right-0 h-[1px] bg-gradient-to-r from-white to-transparent"
+            className="absolute top-0 right-0 h-px bg-linear-to-r from-white to-transparent"
             style={{
               width: "40px",
               transform: `rotate(${-shootingStar.angle}deg)`,
               transformOrigin: "right center",
             }}
           />
-        </motion.div>
+        </div>
+          );
+        })()
       ))}
     </div>
   );

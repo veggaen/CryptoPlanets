@@ -107,6 +107,7 @@ export function triggerSupernovaEjection(
  * Returns via orbital mechanics, spiraling back through the solar system
  */
 export function updateFlungMoons(nodes: GalaxyNode[], dt: number): void {
+    if (flungMoons.size === 0) return;
     const sun = nodes.find(n => n.type === 'sun');
     const planets = nodes.filter(n => n.type === 'planet');
     
@@ -1072,6 +1073,8 @@ export function resolveAllCollisions(
     getBaseOrbitRadius?: (nodeId: string) => number | undefined
 ): CollisionResult[] {
     const results: CollisionResult[] = [];
+
+    const minSeparation = collisionConfig.minSeparation;
     
     // Check all pairs
     for (let i = 0; i < nodes.length; i++) {
@@ -1142,6 +1145,17 @@ export function resolveAllCollisions(
                 }
                 continue; // Don't do normal collision for planet-moon pairs
             }
+
+            // Broad-phase early out: skip expensive collision math if too far apart.
+            // Equivalent to resolveCollision()'s "dist >= sumRadii + minSeparation" check,
+            // but avoids sqrt for most pairs.
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const sumRadii = a.radius + b.radius;
+            const threshold = sumRadii + minSeparation;
+            if ((dx * dx + dy * dy) >= (threshold * threshold)) {
+                continue;
+            }
             
             const result = resolveCollision(a, b);
             if (result.occurred) {
@@ -1179,9 +1193,15 @@ export function decayCollisionGlow(nodes: GalaxyNode[]): void {
 export function applyProximityGlow(nodes: GalaxyNode[]): void {
     const proximityDist = collisionConfig.proximityGlowDistance;
     const maxProximityGlow = collisionConfig.proximityGlowIntensity;
+
+    if (proximityDist <= 0 || maxProximityGlow <= 0) return;
     
     // Only check moons and meteorites for proximity glow
-    const glowableNodes = nodes.filter(n => n.type === 'moon' || n.type === 'meteorite');
+    glowableScratch.length = 0;
+    for (const n of nodes) {
+        if (n.type === 'moon' || n.type === 'meteorite') glowableScratch.push(n);
+    }
+    const glowableNodes = glowableScratch;
     
     for (let i = 0; i < glowableNodes.length; i++) {
         for (let j = i + 1; j < glowableNodes.length; j++) {
@@ -1194,10 +1214,16 @@ export function applyProximityGlow(nodes: GalaxyNode[]): void {
             // Calculate distance between centers
             const dx = b.x - a.x;
             const dy = b.y - a.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
+            const distSq = dx * dx + dy * dy;
             
             // Check if within proximity range (but not colliding)
             const sumRadii = a.radius + b.radius;
+            const minDist = sumRadii;
+            const maxDist = sumRadii + proximityDist;
+            if (distSq <= (minDist * minDist)) continue;
+            if (distSq >= (maxDist * maxDist)) continue;
+
+            const dist = Math.sqrt(distSq);
             const gap = dist - sumRadii;
             
             if (gap > 0 && gap < proximityDist) {
@@ -1231,6 +1257,8 @@ export function applyProximityGlow(nodes: GalaxyNode[]): void {
         }
     }
 }
+
+const glowableScratch: GalaxyNode[] = [];
 
 // Legacy exports for backward compatibility
 export function resolveCollisions(nodes: GalaxyNode[], dt: number): void {

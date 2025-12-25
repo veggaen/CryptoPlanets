@@ -4,6 +4,7 @@ import { memo, useMemo, useState, useCallback } from "react";
 import type { GalaxyData, GalaxyNode, WeightMode } from "@/types/galaxy";
 import type { QualityMode } from "@/types/performance";
 import type { PrimaryProvider } from "@/types/providers";
+import type { VolumeSource } from "@/services/dataLoader";
 import { PrimaryProviderSelect } from "@/components/PrimaryProviderSelect";
 
 interface MobileHUDProps {
@@ -15,6 +16,8 @@ interface MobileHUDProps {
   zoom: number;
   weightMode: WeightMode;
   onWeightModeChange: (mode: WeightMode) => void;
+  volumeSource: VolumeSource;
+  onVolumeSourceChange: (source: VolumeSource) => void;
   hideStables: boolean;
   hideWrapped: boolean;
   onToggleStables: () => void;
@@ -44,6 +47,8 @@ const MobileHUD = memo(({
   zoom,
   weightMode,
   onWeightModeChange,
+  volumeSource,
+  onVolumeSourceChange,
   hideStables,
   hideWrapped,
   onToggleStables,
@@ -61,6 +66,12 @@ const MobileHUD = memo(({
   const [cmcLockedInfoOpen, setCmcLockedInfoOpen] = useState(false);
 
   const allNodes = [sun, ...planets];
+
+  const volumeModeLabel = useMemo(() => {
+    if (volumeSource === 'dex') return '📈 24H DEX Vol';
+    if (volumeSource === 'spot') return '📈 24H CEX Vol';
+    return '📈 24H Total Vol';
+  }, [volumeSource]);
 
   const searchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -418,12 +429,67 @@ const MobileHUD = memo(({
                         >
                           {mode === 'MarketCap' ? '📊 Market Cap' :
                            mode === 'TVL' ? '🔒 TVL' :
-                           mode === 'Volume24h' ? '📈 24H DEX Vol' :
+                           mode === 'Volume24h' ? volumeModeLabel :
                            '📉 24h Change'}
                         </button>
                       ))}
                     </div>
                   </div>
+
+                  {weightMode === 'Volume24h' && (
+                    <div>
+                      <label className="block text-xs text-white/50 mb-2 uppercase tracking-wide">
+                        Volume Source
+                      </label>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => onVolumeSourceChange('dex')}
+                          className={`
+                            flex-1 py-3 px-4 rounded-xl text-sm font-medium transition-all touch-target
+                            ${volumeSource === 'dex'
+                              ? 'bg-cyan-500/20 border-cyan-400/30 text-cyan-200'
+                              : 'bg-white/5 border-white/10 text-white/60 active:bg-white/10'
+                            }
+                            border
+                          `}
+                          aria-pressed={volumeSource === 'dex'}
+                        >
+                          DEX
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onVolumeSourceChange('both')}
+                          className={`
+                            flex-1 py-3 px-4 rounded-xl text-sm font-medium transition-all touch-target
+                            ${volumeSource === 'both'
+                              ? 'bg-white/10 border-white/20 text-white'
+                              : 'bg-white/5 border-white/10 text-white/60 active:bg-white/10'
+                            }
+                            border
+                          `}
+                          aria-pressed={volumeSource === 'both'}
+                        >
+                          BOTH
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onVolumeSourceChange('spot')}
+                          className={`
+                            flex-1 py-3 px-4 rounded-xl text-sm font-medium transition-all touch-target
+                            ${volumeSource === 'spot'
+                              ? 'bg-purple-500/20 border-purple-400/30 text-purple-200'
+                              : 'bg-white/5 border-white/10 text-white/60 active:bg-white/10'
+                            }
+                            border
+                          `}
+                          aria-pressed={volumeSource === 'spot'}
+                        >
+                          CEX
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Rendering profile */}
                   <div className="p-4 rounded-2xl bg-white/5 border border-white/10">

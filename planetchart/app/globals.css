@@ -91,6 +91,37 @@ body {
   animation: slideUp 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
+@keyframes planetchart-starfield-drift-far {
+  0% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(-10px, -5px, 0); }
+  100% { transform: translate3d(0, 0, 0); }
+}
+
+@keyframes planetchart-starfield-drift-mid {
+  0% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(-20px, -10px, 0); }
+  100% { transform: translate3d(0, 0, 0); }
+}
+
+@keyframes planetchart-starfield-drift-near {
+  0% { transform: translate3d(0, 0, 0); }
+  50% { transform: translate3d(-30px, -15px, 0); }
+  100% { transform: translate3d(0, 0, 0); }
+}
+
+@keyframes planetchart-starfield-twinkle {
+  0% { transform: translate3d(0,0,0) scale(1); }
+  50% { transform: translate3d(0,0,0) scale(1.2); }
+  100% { transform: translate3d(0,0,0) scale(1); }
+}
+
+@keyframes planetchart-starfield-shooting {
+  0% { opacity: 0; transform: translate3d(0, 0, 0); }
+  6% { opacity: 1; transform: translate3d(0, 0, 0); }
+  14% { opacity: 1; transform: translate3d(var(--shoot-dx, 150px), var(--shoot-dy, 130px), 0); }
+  18% { opacity: 0; transform: translate3d(var(--shoot-dx, 150px), var(--shoot-dy, 130px), 0); }
+  100% { opacity: 0; transform: translate3d(var(--shoot-dx, 150px), var(--shoot-dy, 130px), 0); }
+}
 .mobile-sheet-exit {
   animation: slideDown 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }

@@ -38,7 +38,7 @@ const QUALITY_BUDGETS = {
   },
 } as const;
 
-const RENDER_FRAME_INTERVAL = 1000 / 30; // 30 FPS cap for React renders
+const RENDER_FRAME_INTERVAL_LITE = 1000 / 30; // 30 FPS cap for React renders (lite mode)
 const VIEW_CULL_PADDING_PX = 220;
 const METRIC_LABELS: Record<WeightMode, string> = {
   MarketCap: "MCap",
@@ -50,6 +50,10 @@ const METRIC_LABELS: Record<WeightMode, string> = {
 };
 
 type DetailTier = "minimal" | "medium" | "full";
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
 
 const DETAIL_THRESHOLDS = {
   planet: { full: 0.055, medium: 0.04 },
@@ -1481,6 +1485,7 @@ export default function CryptoPlanets() {
     cores: null,
     dpr: 1,
   });
+  const [displayRefreshHz, setDisplayRefreshHz] = useState<number | null>(null);
   const [qualityMode, setQualityMode] = useState<QualityMode>("full");
   const [qualityReasons, setQualityReasons] = useState<string[]>([]);
   
@@ -1535,6 +1540,72 @@ export default function CryptoPlanets() {
       dpr: window.devicePixelRatio || 1,
     });
     perfSampleRef.current.lastTimestamp = performance.now();
+  }, []);
+
+  // Estimate the active display refresh rate (can't be queried directly in browsers).
+  // Uses rAF interval timing while the tab is visible.
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof performance === 'undefined') return;
+
+    let rafId = 0;
+    let last = 0;
+    const deltas: number[] = [];
+
+    const computeHz = () => {
+      if (deltas.length < 20) return null;
+      const sorted = [...deltas].sort((a, b) => a - b);
+      const median = sorted[Math.floor(sorted.length / 2)] || 0;
+      if (!Number.isFinite(median) || median <= 0) return null;
+      const hz = 1000 / median;
+      // Very high refresh rates exist (360/480). Clamp to a sane range.
+      return clampNumber(hz, 30, 480);
+    };
+
+    const step = (t: number) => {
+      if (document.visibilityState !== 'visible') {
+        rafId = window.requestAnimationFrame(step);
+        return;
+      }
+
+      if (last) {
+        const dt = t - last;
+        // Ignore huge spikes (tab switch / breakpoint / hiccup).
+        if (dt > 0.5 && dt < 100) {
+          deltas.push(dt);
+          if (deltas.length > 120) deltas.shift();
+        }
+
+        const hz = computeHz();
+        if (hz) {
+          setDisplayRefreshHz((prev) => {
+            if (!prev) return hz;
+            // Avoid thrash from tiny measurement jitter.
+            return Math.abs(prev - hz) < 2 ? prev : hz;
+          });
+        }
+      }
+      last = t;
+      rafId = window.requestAnimationFrame(step);
+    };
+
+    rafId = window.requestAnimationFrame(step);
+
+    const handleVisibility = () => {
+      // Reset sampling when returning to foreground.
+      deltas.length = 0;
+      last = 0;
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleVisibility);
+    window.addEventListener('resize', handleVisibility);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleVisibility);
+      window.removeEventListener('resize', handleVisibility);
+    };
   }, []);
 
   useEffect(() => {
@@ -1673,11 +1744,19 @@ export default function CryptoPlanets() {
     const screenY = y * camera.zoom + camera.y;
     const screenRadius = Math.max(radius * camera.zoom, 6);
 
+    // When zoomed in we can aggressively cull off-screen nodes to reduce DOM/paint.
+    // When zoomed out we keep a larger buffer to avoid pop-in and preserve context.
+    const cullPaddingPx = camera.zoom >= DETAIL_THRESHOLDS.planet.full
+      ? 60
+      : camera.zoom >= DETAIL_THRESHOLDS.planet.medium
+        ? 120
+        : VIEW_CULL_PADDING_PX;
+
     return (
-      screenX + screenRadius + VIEW_CULL_PADDING_PX > -halfWidth &&
-      screenX - screenRadius - VIEW_CULL_PADDING_PX < halfWidth &&
-      screenY + screenRadius + VIEW_CULL_PADDING_PX > -halfHeight &&
-      screenY - screenRadius - VIEW_CULL_PADDING_PX < halfHeight
+      screenX + screenRadius + cullPaddingPx > -halfWidth &&
+      screenX - screenRadius - cullPaddingPx < halfWidth &&
+      screenY + screenRadius + cullPaddingPx > -halfHeight &&
+      screenY - screenRadius - cullPaddingPx < halfHeight
     );
   }, [camera.x, camera.y, camera.zoom, viewportSize.height, viewportSize.width]);
   
@@ -2004,6 +2083,15 @@ export default function CryptoPlanets() {
 
   // Animation loop with camera follow and cinematic transitions
   useEffect(() => {
+    const prefersReducedMotion = typeof window !== 'undefined'
+      && typeof window.matchMedia === 'function'
+      && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    const targetHz = qualityMode === 'lite' || prefersReducedMotion
+      ? 30
+      : clampNumber(displayRefreshHz ?? 120, 60, 480);
+    const renderFrameInterval = 1000 / targetHz;
+
     const animate = (time: number) => {
       if (previousTimeRef.current !== undefined && galaxyStateRef.current) {
         const deltaTime = time - previousTimeRef.current;
@@ -2066,7 +2154,7 @@ export default function CryptoPlanets() {
         recordPerfSample(physicsDuration, cameraDuration);
 
         const timeSinceRender = time - lastRenderTimeRef.current;
-        if (timeSinceRender >= RENDER_FRAME_INTERVAL) {
+        if (timeSinceRender >= renderFrameInterval) {
           lastRenderTimeRef.current = time;
           forceRender();
         }
@@ -2077,7 +2165,7 @@ export default function CryptoPlanets() {
 
     requestRef.current = requestAnimationFrame(animate);
     return () => cancelAnimationFrame(requestRef.current);
-  }, [followingId, targetZoom, isTransitioning, recordPerfSample, forceRender]);
+  }, [followingId, targetZoom, isTransitioning, qualityMode, displayRefreshHz, recordPerfSample, forceRender]);
 
   // Handle follow planet - from HUD or radial menu
   // Uses cinematic "swoosh" transition: zoom out → pan via center → zoom in
@@ -3106,6 +3194,20 @@ export default function CryptoPlanets() {
               } else {
                 url.searchParams.delete('metric');
               }
+
+              // Volume source is only meaningful for Volume24h.
+              if (newMode === 'Volume24h') {
+                url.searchParams.set('volumeSource', volumeSource);
+              } else {
+                url.searchParams.delete('volumeSource');
+              }
+              window.history.replaceState({}, '', url.toString());
+            }}
+            volumeSource={volumeSource}
+            onVolumeSourceChange={(source) => {
+              setVolumeSource(source);
+              const url = new URL(window.location.href);
+              url.searchParams.set('volumeSource', source);
               window.history.replaceState({}, '', url.toString());
             }}
             hideStables={hideStables}
