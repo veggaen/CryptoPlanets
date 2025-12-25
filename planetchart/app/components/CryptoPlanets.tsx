@@ -42,11 +42,11 @@ const RENDER_FRAME_INTERVAL = 1000 / 30; // 30 FPS cap for React renders
 const VIEW_CULL_PADDING_PX = 220;
 const METRIC_LABELS: Record<WeightMode, string> = {
   MarketCap: "MCap",
-  TVL: "TVL",
+  TVL: "",
   Volume24h: "24H Vol",
-  Change24h: "24h Δ",
-  Change7d: "7d Δ",
-  Change30d: "30d Δ",
+  Change24h: "",
+  Change7d: "7d",
+  Change30d: "30d",
 };
 
 type DetailTier = "minimal" | "medium" | "full";
@@ -2435,6 +2435,49 @@ export default function CryptoPlanets() {
     const geckoId = tokenData?.geckoId || chainData?.geckoId;
     const parentChainId = radialMenuNode.parentId as string | null;
 
+    const symbolUpper = String(symbol || '').toUpperCase();
+    const CMC_SLUG_BY_SYMBOL: Record<string, string> = {
+      BTC: 'bitcoin',
+      ETH: 'ethereum',
+      BNB: 'bnb',
+      SOL: 'solana',
+      XRP: 'xrp',
+      ADA: 'cardano',
+      DOGE: 'dogecoin',
+      TRX: 'tron',
+      AVAX: 'avalanche',
+      MATIC: 'polygon',
+      POL: 'polygon',
+    };
+
+    const GECKO_ID_BY_SYMBOL: Record<string, string> = {
+      BTC: 'bitcoin',
+      ETH: 'ethereum',
+      BNB: 'bnb',
+      SOL: 'solana',
+      XRP: 'ripple',
+      ADA: 'cardano',
+      DOGE: 'dogecoin',
+      TRX: 'tron',
+      AVAX: 'avalanche-2',
+      MATIC: 'polygon',
+      POL: 'polygon',
+    };
+
+    const TRADINGVIEW_SYMBOL_BY_SYMBOL: Record<string, string> = {
+      BTC: 'BTC',
+      ETH: 'COINBASE:ETHUSD',
+      BNB: 'BINANCE:BNBUSD',
+      SOL: 'BINANCE:SOLUSD',
+      XRP: 'BINANCE:XRPUSD',
+      ADA: 'BINANCE:ADAUSD',
+      DOGE: 'BINANCE:DOGEUSD',
+      TRX: 'BINANCE:TRXUSD',
+      AVAX: 'BINANCE:AVAXUSD',
+      MATIC: 'BINANCE:MATICUSD',
+      POL: 'BINANCE:POLUSD',
+    };
+
     const fmtUsd = (v: number | undefined) => {
       if (!Number.isFinite(v)) return '—';
       const value = v as number;
@@ -2480,9 +2523,11 @@ export default function CryptoPlanets() {
         ? `https://dexscreener.com/${dexChain}/${contractAddress}`
         : null;
     })();
-    const geckoUrl = geckoId
-      ? `https://www.coingecko.com/en/coins/${geckoId}`
-      : null;
+    const geckoUrl = (() => {
+      const id = geckoId || GECKO_ID_BY_SYMBOL[symbolUpper];
+      if (!id) return null;
+      return `https://www.coingecko.com/en/coins/${id}`;
+    })();
 
     const tvUrl = symbol
       ? (() => {
@@ -2494,11 +2539,20 @@ export default function CryptoPlanets() {
             const tvSymbol = `${dexId.toUpperCase()}:${String(baseSym).toUpperCase()}${String(quoteSym).toUpperCase()}_${pairAddr.slice(0, 6).toUpperCase()}.USD`;
             return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(tvSymbol)}`;
           }
+
+          const mapped = TRADINGVIEW_SYMBOL_BY_SYMBOL[symbolUpper];
+          if (mapped) return `https://www.tradingview.com/chart/?symbol=${encodeURIComponent(mapped)}`;
+
           return `https://www.tradingview.com/symbols/?query=${encodeURIComponent(symbol)}`;
         })()
       : null;
+
     const cmcUrl = symbol
-      ? `https://coinmarketcap.com/search/?q=${encodeURIComponent(symbol)}`
+      ? (() => {
+          const slug = CMC_SLUG_BY_SYMBOL[symbolUpper];
+          if (slug) return `https://coinmarketcap.com/currencies/${slug}/`;
+          return `https://coinmarketcap.com/search/?q=${encodeURIComponent(symbol)}`;
+        })()
       : null;
 
     const matchaUrl = (() => {
